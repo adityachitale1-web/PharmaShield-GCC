@@ -15,7 +15,24 @@ Demonstration SKU: **Carboplatin Injection 10 mg/mL** (Tier 1, life-critical onc
 | 4. Hybrid AHP + Entropy TOPSIS and PuLP order split | `layer4_decision/` | Member 3 | to do |
 | 5. Streamlit cockpit, governance and audit log | `app/` | Member 5 | to do |
 
-## Quick start (Layer 1)
+## Run it on Streamlit
+
+**Streamlit Community Cloud:** share.streamlit.io → *Create app* → repo `adityachitale1-web/PharmaShield-GCC`,
+branch `main`, main file `streamlit_app.py` → *Deploy*. Optional secrets (App settings → Secrets):
+
+```toml
+OPENFDA_API_KEY = "..."      # higher openFDA quota
+FDA_DD_USER = "you@example.com"  # FDA Data Dashboard inspections API
+FDA_DD_KEY = "..."
+```
+
+**Locally:** `pip install -r requirements.txt` then `streamlit run streamlit_app.py`.
+
+In the app: pick sources in the sidebar, optionally upload the FDA inspections export, warning letters or contracts,
+then press **Run Layer 1**. Tabs show source status, every data-quality check, the scoring panel seed, all output
+tables, quarantined rows and a one-click zip download of the outputs.
+
+## Quick start (Layer 1, command line)
 
 ```bash
 cd layer1_ingestion
