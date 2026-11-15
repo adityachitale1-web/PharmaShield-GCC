@@ -1,0 +1,49 @@
+SYNTHETIC DOCUMENT - PharmaShield GCC academic prototype (SP Jain MAIB, AI in Operations, Group 3).
+This is NOT a real agreement. All terms are invented for testing an NLP clause extractor and do not describe any actual contract of the named company.
+
+MASTER SUPPLY AGREEMENT No. PS-MSA-2026-009
+
+This Master Supply Agreement (the "Agreement") is made between Teyro Labs Private Limited (the "Supplier") and Gulf Health Purchasing Consortium (a fictional UAE group purchasing organisation) (the "Buyer"), effective 1 January 2026 (the "Effective Date").
+
+1. PRODUCT AND TERRITORY
+1.1 The Supplier shall supply Carboplatin Injection 10 mg/mL (450 mg/45 mL multi-dose vials) (the "Product") manufactured at the Supplier's approved facility in India.
+1.2 Territory: United Arab Emirates. Delivery terms: DAP Dubai (Incoterms 2020).
+
+2. FORECASTS, ORDERS AND LEAD TIME
+2.1 The Buyer shall provide a rolling 6-month non-binding forecast. Purchase orders shall be placed against the forecast.
+2.2 Lead time: the Supplier shall deliver each purchase order within 90 calendar days of order acceptance.
+
+3. LATE DELIVERY
+3.1 Delivery dates are estimates only. The Supplier shall not be liable for any penalty, damages or costs arising from late delivery.
+
+4. EXCLUSIVITY
+4.1 Nothing in this Agreement obliges the Buyer to purchase exclusively from the Supplier; the Buyer may qualify and purchase from second and third sources at any time.
+
+5. SUPPLY CONTINUITY
+5.1 In the event of a supply shortage, the Supplier may allocate available Product among its customers at its sole discretion.
+5.2 The Supplier is not required to maintain safety stock in the Territory.
+5.3 The Supplier shall notify the Buyer within 5 business days of any FDA Form 483, Warning Letter, Official Action Indicated classification, import alert or recall affecting the Product or its facility.
+
+6. PRICE
+6.1 The Supplier may apply freight, insurance and war-risk surcharges on 15 days' written notice; such surcharges are not capped.
+
+7. QUALITY, SERIALISATION AND RECALLS
+7.1 The Product shall be manufactured in accordance with current Good Manufacturing Practice and the marketing authorisation registered with the UAE Ministry of Health and Prevention.
+7.2 Each pack shall carry GS1 DataMatrix serialisation compatible with the Tatmeen track-and-trace platform.
+7.3 The Supplier shall bear all costs of any recall caused by a quality defect attributable to the Supplier.
+
+8. FORCE MAJEURE
+8.1 Force Majeure shall mean any event the Supplier considers beyond its control, including without limitation war, regional conflict, closure or restriction of the Strait of Hormuz or Gulf airspace, port congestion, carrier shortages, raw-material or API shortages, labour disputes and changes in law. The Supplier shall have no obligation to re-route shipments, may suspend deliveries for the duration of the event without limit, and shall have no liability for any delay or non-delivery so caused.
+
+9. TERM AND TERMINATION
+9.1 The initial term is 36 months from the Effective Date.
+9.2 The Supplier may terminate this Agreement for convenience on 30 days' written notice at any time.
+
+10. DATA PROTECTION
+10.1 Each party shall process personal data in accordance with Federal Decree-Law No. 45 of 2021 (UAE PDPL).
+
+11. GOVERNING LAW
+11.1 This Agreement is governed by the laws of the Emirate of Dubai and the federal laws of the UAE; disputes are referred to the DIFC Courts.
+
+Signed for and on behalf of the Supplier: [NAME], Authorised Signatory
+Signed for and on behalf of the Buyer: [NAME], Chief Procurement Officer

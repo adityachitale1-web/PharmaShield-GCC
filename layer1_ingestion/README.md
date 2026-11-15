@@ -9,7 +9,7 @@ analysis-ready tables for Layer 2 (entity fusion), Layer 3 (C1–C5 engines) and
 pip install -r requirements.txt
 python run_ingestion.py                 # live run (≈2–4 min; openFDA + World Bank)
 python run_ingestion.py --offline       # replay cached API snapshots, no network (demo / audit)
-python -m pytest -q                     # 17 offline tests
+python -m pytest -q                     # 20 offline tests
 ```
 
 Optional:
@@ -33,7 +33,14 @@ Optional:
 | 8 | FDA CGMP warning letters + supplier contracts | saved files / URL list / optional crawl | C4 NLP (Member 4B) |
 | 9 | Scenario assumptions (corridor shares, CMS ASP price benchmark) | `reference/*.csv` | C1, C5 |
 
-Full catalogue with URLs, fields and licences: **[DATA_SOURCES.md](DATA_SOURCES.md)**.
+Full catalogue with URLs, fields and licences: **[DATA_SOURCES.md](DATA_SOURCES.md)**. Line-by-line check against the plan: **[PLAN_COMPLIANCE.md](PLAN_COMPLIANCE.md)**.
+
+## The hand-off file (`data/processed/`)
+
+`suppliers_matrix.csv` uses the **locked schema of plan §5.1** (16 columns, fixed names and order). Layer 1 fills
+identity, country, probation, capacity, C1, C5, corridor share, shortage flag and OAI count. `C2_delivery_risk`,
+`C4_compliance_risk` and `shap_top3_reasons` are left empty for Members 4A / 4B to fill in the same file.
+`quotes_2026_carboplatin.csv` (plan §4.3) sits next to it.
 
 ## What comes out (`data/interim/`)
 
@@ -50,7 +57,9 @@ Full catalogue with URLs, fields and licences: **[DATA_SOURCES.md](DATA_SOURCES.
 | `wb_country_indicators.csv` | country (latest non-null LPI + WGI, with year) | Member 2B |
 | `warning_letters_corpus.csv`, `contracts_corpus.csv` | document (PII-redacted text + metadata) | Member 4B |
 | `quotes_2026_carboplatin.csv` | labeler (C1 inputs, SCENARIO-labelled) | Member 3 |
-| `layer1_scoring_panel_seed.csv` | labeler — plant country, Hormuz/air share, LPI/WGI, landed cost, capacity, **preliminary** exact-key links | Member 2B → `suppliers_matrix.csv` |
+| `layer1_scoring_panel_seed.csv` | labeler, all raw panel fields | Member 2B |
+| `entity_match_candidates.csv` | labeler × external name, match method and score, `needs_manual_check` | Member 2B |
+| `ghsc_psm_shipments_clean.csv`, `internal_*.csv` | only if those optional files are supplied | Members 4A, 2B |
 
 Also: `data/raw/` (immutable API snapshots), `data/quarantine/*_rejected.csv` (every rejected row + reason),
 `data/quality/quality_report.md` (all checks), `data/manifest.json` (row counts + SHA-256 per output).
@@ -81,30 +90,24 @@ suspicious-but-real values are kept and flagged; every decision is counted in th
 | PII in letters/contracts (UAE PDPL, Decree-Law 45/2021) | e-mails, phone numbers, salutation names redacted before writing |
 | Look-ahead leakage | site/country priors computed on train period only |
 
-## Manual inputs (one-time, ~10 minutes)
+## Inputs
 
-1. **FDA inspections** — nothing to do: the run downloads FDA's published full dataset
-   (`https://datadashboard.fda.gov/InspectionsDataset.xlsx`) and keeps drug inspections from the last 5 years.
-   API credentials (`FDA_DD_USER`/`FDA_DD_KEY`) or a manual export in `data/manual/fda_inspections/` take priority if present.
-2. **Warning letters (50–100 for Member 4B)** — put FDA letter URLs in `data/manual/warning_letters/urls.csv`
-   (column `url`) and/or save letter pages as HTML/PDF there. `--crawl-warning-letters 80` tries the FDA index automatically,
-   but fda.gov sometimes blocks scripts.
-3. **Contracts** — Member 4B's synthetic MSAs go into `data/manual/contracts/` (.txt/.md/.docx/.pdf).
-4. **Plant country / capacity overrides** — for any labeler the label text doesn't resolve, add a row to
-   `reference/manufacturer_overrides.csv` (`labeler_key, manufacturing_country, iso3, monthly_capacity_units, evidence`).
-5. **Tender quotes** (optional) — `reference/quotes_2026_carboplatin_override.csv` with real prices replaces the benchmark.
+Nothing has to be uploaded. The repo ships the SCMS file, 51 FDA warning-letter URLs (`data/manual/warning_letters/urls.csv`)
+and 11 synthetic supplier contracts (`data/manual/contracts/`), and FDA inspections are downloaded automatically.
+Optional extras: more letters or contracts in the same folders; `reference/manufacturer_overrides.csv` for plant country
+and capacity; `reference/quotes_2026_carboplatin_override.csv` for real tender quotes; `data/manual/ghsc_psm/` and
+`data/manual/internal/` for the optional datasets.
 
 ## Hand-off notes for teammates
 
-* **Member 2B (entity fusion):** the panel seed's `prelim_*` columns use exact core-key matching only. Replace them with
-  rapidfuzz `token_sort_ratio ≥ 88` + manual check (plan step 3). Parent links matter: e.g. Eugia is Aurobindo's
-  injectables unit, and Aurobindo has 3,283 SCMS shipments — exact keys won't see that.
-* **Member 4A (ML):** use `time_split`; `late` is 11.5% overall. Consider excluding `flag_date_order_violation` rows.
-  Don't drop `outlier_*` rows before fitting Isolation Forest.
-* **Member 3 (MCDM/LP):** `monthly_capacity_units` defaults to 4,000 vials (SCENARIO) until overrides are filled.
-* **Slides:** quote numbers from `data/quality/quality_report.md` after the final live run, not from the plan.
-  On 15 Nov 2026 the NDC directory returned **11** human-Rx carboplatin labelers (40 product rows), not the 18 in the
-  plan; Cipla and Hetero did not appear as carboplatin labelers. Re-check on the final run.
+* **Member 2B:** review `entity_match_candidates.csv` where `needs_manual_check` is true (plan step 3). Parent links come
+  from `reference/corporate_aliases.csv` (e.g. Eugia → Aurobindo, Accord → Intas).
+* **Member 4A:** use `time_split`; don't drop `outlier_*` rows before fitting Isolation Forest. Write `C2`, `C3` and
+  `shap_top3_reasons` into `suppliers_matrix.csv`.
+* **Member 4B:** corpora are `warning_letters_corpus.csv` and `contracts_corpus.csv`; C4 inputs are in the matrix's
+  supporting columns.
+* **Member 3:** `monthly_capacity_units` is a SCENARIO default of 4,000 until overrides are filled.
+* **Slides:** take labeler and shortage counts from the final live run, not from the plan text (see PLAN_COMPLIANCE.md).
 
 ## Layout
 
@@ -117,7 +120,8 @@ ingestion/openfda.py        NDC gate, label plant country, shortages, recalls
 ingestion/fda_inspections.py
 ingestion/worldbank.py
 ingestion/documents.py      warning letters + contracts (PII redaction)
-ingestion/scenario.py       scenario validation, C1 quotes, panel seed
+ingestion/scenario.py       scenario validation, C1 quotes, entity links, suppliers_matrix (locked schema)
+ingestion/optional_sources.py  GHSC-PSM and internal GPO files (optional)
 reference/                  site→country map, countries, corridor + price assumptions, overrides
 tests/test_ingestion.py     offline tests (fake APIs + messy synthetic SCMS + real SCMS)
 ```

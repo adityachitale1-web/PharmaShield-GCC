@@ -73,6 +73,19 @@ MODE_MAP = {"air": "Air", "air charter": "Air Charter", "ocean": "Ocean", "truck
 
 
 # --------------------------------------------------------------------------- #
+def _step(df: pd.DataFrame, name: str) -> None:
+    """Plan 5.2 step 1: print shape and class balance at every step."""
+    if "late" in df.columns and len(df):
+        n1 = int(df["late"].sum())
+        bal = f"late={n1} ({n1 / len(df):.2%}) on_time={len(df) - n1}"
+    else:
+        bal = "target not built yet"
+    msg = f"[{SRC}] STEP {name}: shape={df.shape} | class balance: {bal}"
+    print(msg)
+    log.info(msg)
+    QLOG.check(SRC, f"step:{name}", len(df), detail=f"shape={df.shape}; {bal}")
+
+
 def _read_raw(path: Path) -> pd.DataFrame:
     if path.suffix.lower() in {".xlsx", ".xls"}:
         df = pd.read_excel(path, dtype=str)
@@ -238,7 +251,7 @@ def clean_scms(path: Path, ref_dir: Path | None = None) -> pd.DataFrame:
     df = _read_raw(path)
     n0 = len(df)
     QLOG.check(SRC, "rows_read", n0, detail=f"{path.name} sha256={sha256_file(path)[:12]}")
-    log.info("SCMS read: shape=%s", df.shape)
+    _step(df, "1 raw file read")
 
     df = _map_headers(df)
     for c in df.columns:
@@ -269,7 +282,7 @@ def clean_scms(path: Path, ref_dir: Path | None = None) -> pd.DataFrame:
     df = df[~dup_content].copy()
     QLOG.check(SRC, "exact_duplicate_lines", dup_content.sum(), n0, action="quarantined (kept lowest ID)",
                severity="warning" if dup_content.any() else "info")
-    log.info("after dedupe: shape=%s", df.shape)
+    _step(df, "2 blank rows + duplicates removed")
 
     # ---- dates ---------------------------------------------------------------
     for col in DATE_FORMATS:
@@ -280,6 +293,10 @@ def clean_scms(path: Path, ref_dir: Path | None = None) -> pd.DataFrame:
     df = df[~no_target].copy()
     QLOG.check(SRC, "missing_scheduled_or_delivered_date", no_target.sum(), n0,
                action="quarantined (no label)", severity="warning" if no_target.any() else "info")
+    # binary target exactly as the plan defines it: late = delivered > scheduled
+    df["delay_days"] = (df["delivered_to_client_date"] - df["scheduled_delivery_date"]).dt.days
+    df["late"] = (df["delivered_to_client_date"] > df["scheduled_delivery_date"]).astype(int)
+    _step(df, "3 dates parsed (errors=coerce) + target late built")
 
     # ---- numerics -----------------------------------------------------------
     for c in ["line_item_quantity", "line_item_value", "pack_price", "unit_price",
@@ -294,6 +311,7 @@ def clean_scms(path: Path, ref_dir: Path | None = None) -> pd.DataFrame:
     quarantine(SRC, df[impossible], "non_positive_quantity_or_negative_value")
     df = df[~impossible].copy()
     QLOG.check(SRC, "impossible_qty_or_value", impossible.sum(), n0, action="quarantined")
+    _step(df, "4 numeric fields coerced + impossible values removed")
 
     df["flag_zero_value_line"] = df["line_item_value"].eq(0) | df["unit_price"].eq(0)
     QLOG.check(SRC, "zero_value_or_zero_price_lines", df["flag_zero_value_line"].sum(), len(df),
@@ -315,6 +333,8 @@ def clean_scms(path: Path, ref_dir: Path | None = None) -> pd.DataFrame:
     # ---- freight / weight / insurance ----------------------------------------
     _parse_cost_field(df, "freight_cost_usd", "freight")
     _parse_cost_field(df, "weight_kilograms", "weight")
+    # plan-literal column: non-numeric freight strings coerced to NaN, nothing else done
+    df["freight_cost_usd_coerced"] = df["freight_raw_numeric"]
     _allocate_references(df, "freight")
     _allocate_references(df, "weight")
     df.loc[df["freight_status"].eq("included_in_commodity"), "freight_usd"] = np.nan
@@ -327,6 +347,7 @@ def clean_scms(path: Path, ref_dir: Path | None = None) -> pd.DataFrame:
     df.loc[df["insurance_imputed"], "insurance_usd"] = (df["line_item_value"] * yr_rate)[df["insurance_imputed"]]
     QLOG.check(SRC, "insurance_missing_imputed", df["insurance_imputed"].sum(), len(df),
                action="imputed = line value x same-year median insurance rate (flagged)")
+    _step(df, "5 freight/weight coerced, shared shipments allocated, insurance imputed")
 
     # ---- categoricals ----------------------------------------------------------
     df["shipment_mode"] = df["shipment_mode"].str.lower().map(MODE_MAP).fillna("Unknown")
@@ -353,19 +374,19 @@ def clean_scms(path: Path, ref_dir: Path | None = None) -> pd.DataFrame:
                action="kept + flagged (exclude in ML if desired)", severity="warning" if order_viol.any() else "info")
 
     # ---- target ----------------------------------------------------------------
-    d["delay_days"] = (d["delivered_to_client_date"] - d["scheduled_delivery_date"]).dt.days
+    _step(d, "6 categoricals standardised + plant country mapped")
     implausible = d["delay_days"].abs() > cfg.max_abs_delay_days
     quarantine(SRC, d[implausible], f"implausible_delay_gt_{cfg.max_abs_delay_days}d")
     d = d[~implausible].copy()
     QLOG.check(SRC, f"implausible_delay_abs_gt_{cfg.max_abs_delay_days}d", implausible.sum(), n0,
                action="quarantined (likely keying error)", severity="warning" if implausible.any() else "info")
-    d["late"] = (d["delay_days"] > 0).astype(int)
+    d["late"] = (d["delivered_to_client_date"] > d["scheduled_delivery_date"]).astype(int)
     d["scheduled_year"] = d["scheduled_delivery_date"].dt.year
     d["time_split"] = np.where(d["scheduled_year"] <= cfg.train_end_year, "train",
                                np.where(d["scheduled_year"].isin(cfg.test_years), "test", "out_of_range"))
     bal = d.groupby("time_split")["late"].agg(["size", "mean"]).round(4).to_dict("index")
     QLOG.check(SRC, "class_balance_late", int(d["late"].sum()), len(d), detail=f"by split: {bal}")
-    log.info("target built: shape=%s late_rate=%.3f split=%s", d.shape, d["late"].mean(), bal)
+    _step(d, "7 implausible delays removed + chronological split assigned")
 
     # ---- engineered line features + outlier FLAGS --------------------------------
     priced = ~d["flag_zero_value_line"]
@@ -383,6 +404,7 @@ def clean_scms(path: Path, ref_dir: Path | None = None) -> pd.DataFrame:
         QLOG.check(SRC, f"robust_outlier:{feat}", d[f"outlier_{feat}"].sum(), len(d),
                    action="FLAGGED only - retained as Isolation Forest signal")
     d["outlier_any"] = d.filter(like="outlier_").any(axis=1)
+    _step(d, "8 features engineered + outliers flagged (final)")
 
     schema = [
         Col("id", "str", nullable=False, unique=True),
@@ -423,6 +445,7 @@ def site_features(clean: pd.DataFrame) -> pd.DataFrame:
         site_mean_delay_days=("delay_days", "mean"),
         site_p90_delay_days=("delay_days", lambda s: s.quantile(0.9)),
         site_mean_freight_to_value=("freight_to_value_ratio", "mean"),
+        site_unit_price_variance=("unit_price", "var"),
         site_unit_price_cv=("unit_price", lambda s: s.std() / s.mean() if s.mean() else np.nan),
         site_air_share=("is_air", "mean"),
         first_shipment=("scheduled_delivery_date", "min"),

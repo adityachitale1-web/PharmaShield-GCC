@@ -55,7 +55,7 @@ NDC = [
     ndc_rec("Eugia US LLC", "55150-335", strength="450 mg/45mL", set_id="set-eugia"),
     ndc_rec("AVYXA Pharma, LLC", "83831-141", strength="80 mg/8mL", form="INJECTION", cat="NDA", of=False),
     ndc_rec("Gland Pharma Limited", "68083-190", set_id="set-gland"),
-    ndc_rec("Bulk API Co", "11111-111", form="POWDER", ptype="BULK INGREDIENT", finished=False),
+    ndc_rec("Cipla Ltd.", "11111-111", form="POWDER", ptype="BULK INGREDIENT", finished=False, cat="BULK INGREDIENT", of=False),
     ndc_rec("Expired Labs Inc", "22222-222", exp="20200101"),
     ndc_rec("Dilute Co", "33333-333", strength="5 mg/mL"),
     ndc_rec("Combo Pharma", "44444-444", ingredients=[{"name": "CARBOPLATIN", "strength": "10 mg/mL"},
@@ -70,6 +70,9 @@ LABELS = [
     {"set_id": "set-gland", "id": "l2", "effective_time": "20250301",
      "openfda": {"manufacturer_name": ["Gland Pharma Limited"]},
      "package_label_principal_display_panel": ["Mfd. by: Gland Pharma Limited Hyderabad - 500043, India"]},
+    {"set_id": "set-hosp", "id": "l3", "effective_time": "20250101",
+     "openfda": {"manufacturer_name": ["Hospira, Inc."]},
+     "spl_unclassified_section": ["Manufactured by: Hospira, Inc. Lake Forest, IL 60045"]},
     {"set_id": "set-gland", "id": "l2-old", "effective_time": "20200301",   # older version -> dropped
      "openfda": {"manufacturer_name": ["Gland Pharma Limited"]},
      "spl_unclassified_section": ["Made in Germany"]},
@@ -177,11 +180,14 @@ def test_strength_parser(s, exp):
 def test_ndc_gate(http):
     prods = openfda.ndc_products(http)
     labs = openfda.ndc_labelers(prods)
-    q = set(labs["labeler_name_fda"])
-    assert q == {"Apotex Corp.", "Hospira, Inc.", "Eugia US LLC", "AVYXA Pharma, LLC", "Gland Pharma Limited"}
+    fin = set(labs.loc[labs.authorization_type == "finished_injection", "labeler_name_fda"])
+    assert fin == {"Apotex Corp.", "Hospira, Inc.", "Eugia US LLC", "AVYXA Pharma, LLC", "Gland Pharma Limited"}
+    # plan panel = every live NDC labeler of the molecule; bulk API kept but flagged
+    assert set(labs.loc[labs.authorization_type == "bulk_api_only", "labeler_name_fda"]) == {"Cipla Ltd."}
+    assert not {"Expired Labs Inc", "Dilute Co", "Combo Pharma"} & set(labs["labeler_name_fda"])
     assert prods["product_ndc"].is_unique                           # duplicate NDC collapsed
     reasons = prods.set_index("labeler_name_fda")["exclusion_reasons"]
-    assert "not_human_rx" in reasons["Bulk API Co"]
+    assert "not_human_rx" in reasons["Cipla Ltd."]
     assert "listing_expired" in reasons["Expired Labs Inc"]
     assert "concentration_mismatch" in reasons["Dilute Co"]
     assert "combination_or_wrong_molecule" in reasons["Combo Pharma"]
@@ -193,6 +199,7 @@ def test_label_country(http):
     by = lab.set_index("spl_set_id")["label_country"]
     assert by["set-apotex"] == "India"                               # 'made by' beats 'made for'
     assert by["set-gland"] == "India"
+    assert by["set-hosp"] == "United States"                         # US address without country name
 
 
 def test_shortages_dedupe(http):
@@ -363,3 +370,71 @@ def test_inspections_public_download(tmp_path, monkeypatch):
         assert len(df2) == 2 and mode2 == "public_dataset_download"
     finally:
         object.__setattr__(cfgmod.SETTINGS, "paths", cfgmod.Paths())
+
+
+# --------------------------------------------------------------------------- #
+# Locked schema (plan 5.1) + entity linking (plan 5.2 step 3)
+# --------------------------------------------------------------------------- #
+PLAN_LOCKED_COLUMNS = ["sku_id", "criticality_tier", "manufacturer_id", "labeler_name_fda",
+                       "manufacturing_country", "is_probation", "monthly_capacity_units", "C1_landed_cost",
+                       "C2_delivery_risk", "C3_price_integrity", "C4_compliance_risk", "C5_route_exposure",
+                       "hormuz_air_share", "active_fda_shortage", "oai_count_5yr", "shap_top3_reasons"]
+
+
+def test_suppliers_matrix_locked_schema(http, tmp_path):
+    from ingestion import scenario
+    from ingestion.common import write_table
+    interim = tmp_path / "interim"
+    prods = openfda.ndc_products(http)
+    write_table(openfda.ndc_labelers(prods), "fda_ndc_qualified_labelers", interim)
+    write_table(openfda.label_manufacturing_sites(http, ROOT / "reference"), "fda_label_manufacturing_sites", interim)
+    sku_sh, _ = openfda.shortages(http)
+    write_table(sku_sh, "fda_shortages_sku", interim)
+    write_table(openfda.recalls(http), "fda_recalls_5yr", interim)
+    write_table(worldbank.build(http), "wb_country_indicators", interim)
+    pd.DataFrame([
+        {"fei_number": "1", "legal_name": "Gland Pharma Ltd", "classification_code": "OAI"},
+        {"fei_number": "1", "legal_name": "Gland Pharma Ltd", "classification_code": "VAI"},
+        {"fei_number": "2", "legal_name": "Aurobindo Pharma Limited Unit IV", "classification_code": "OAI"},
+        {"fei_number": "3", "legal_name": "Glandular Foods Inc", "classification_code": "OAI"},
+    ]).to_csv(interim / "fda_inspections_drugs_5yr.csv", index=False)
+    pd.DataFrame({"id": range(12), "vendor": ["SCMS from RDC"] * 12, "line_item_value": 100.0,
+                  "insurance_usd": 0.2, "insurance_imputed": False,
+                  "manufacturing_site": ["Aurobindo Unit III, India"] * 7 + ["Cipla, Goa, India"] * 5,
+                  }).to_csv(interim / "scms_shipments_clean.csv", index=False)
+
+    tabs = scenario.build(ROOT / "reference", interim)
+    m = tabs["suppliers_matrix"].set_index("manufacturer_id")
+    assert list(tabs["suppliers_matrix"].columns[:16]) == PLAN_LOCKED_COLUMNS      # names AND order
+    assert scenario.LOCKED_COLUMNS == PLAN_LOCKED_COLUMNS
+    assert (m["sku_id"] == "CARBOPLATIN_INJ_10MG_ML").all() and (m["criticality_tier"] == 1).all()
+    for c in ["C1_landed_cost", "C5_route_exposure", "hormuz_air_share"]:
+        assert m[c].between(0, 1).all()
+    assert m["C1_landed_cost"].min() == 0 and m["C1_landed_cost"].max() == 1       # min-max
+    # C5 = min(1, share) x (1 - LPI/5): India share .855, LPI 3.4
+    assert m.loc["GLAND PHARMA", "C5_route_exposure"] == pytest.approx(0.855 * (1 - 3.4 / 5), abs=1e-6)
+    # entity resolution: suffix variant, parent alias, and no false positive on 'Glandular'
+    assert m.loc["GLAND PHARMA", "oai_count_5yr"] == 1 and m.loc["GLAND PHARMA", "vai_count_5yr"] == 1
+    assert m.loc["EUGIA US", "oai_count_5yr"] == 1                                  # via Aurobindo parent
+    assert bool(m.loc["HOSPIRA", "active_fda_shortage"]) and not bool(m.loc["GLAND PHARMA", "active_fda_shortage"])
+    # probation = fewer than 5 historical SCMS shipments
+    assert not m.loc["EUGIA US", "is_probation"] and not m.loc["CIPLA", "is_probation"]
+    assert m.loc["GLAND PHARMA", "is_probation"]
+    assert (m.loc[m.is_probation, "C3_price_integrity"] == 0).all()                 # plan 4.3 default
+    assert m["C2_delivery_risk"].isna().all() and m["C4_compliance_risk"].isna().all()
+    assert (m["shap_top3_reasons"].map(json.loads).map(type) == list).all()         # valid JSON string
+    assert m.loc["CIPLA", "manufacturing_country"] == "India"
+    assert tabs["entity_match_candidates"]["needs_manual_check"].any()
+
+
+def test_scms_site_features_have_plan_metrics():
+    if not REAL.exists():
+        pytest.skip("real SCMS file not present")
+    out = scms.clean_scms(REAL, ROOT / "reference")
+    feats, _ = scms.site_features(out)
+    for c in ["site_on_time_rate", "site_mean_delay_days", "site_p90_delay_days", "site_mean_freight_to_value",
+              "site_unit_price_variance", "site_air_share"]:                        # plan 5.2 step 2
+        assert c in feats.columns
+    assert (out["late"] == (out["delivered_to_client_date"] > out["scheduled_delivery_date"]).astype(int)).all()
+    steps = [r for r in common.QLOG.records if r["check"].startswith("step:")]
+    assert len(steps) == 8 and all("class balance" in r["detail"] or "late=" in r["detail"] or "target" in r["detail"] for r in steps)

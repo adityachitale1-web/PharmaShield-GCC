@@ -195,17 +195,22 @@ def warning_letters(http: HttpClient, manual_dir: Path, crawl: int = 0) -> pd.Da
                             if l.strip().startswith("http")]
     if crawl:
         targets += crawl_index(http, crawl)
-    seen = set()
+    seen, unreachable = set(), []
     for t in targets:
         if t["url"] in seen:
             continue
         seen.add(t["url"])
         html = http.get_text("fda_warning_letters/letters", t["url"])
         if html is None:
-            QLOG.check("warning_letters", "letter_unreachable", 1, severity="warning", detail=t["url"])
+            unreachable.append(t["url"])
             continue
         text, title = _html_to_text(html)
         recs.append(_letter_record(text, title, t["url"], None, t.get("company_hint")))
+    if targets:
+        QLOG.check("warning_letters", "letters_unreachable", len(unreachable), len(seen),
+                   severity="warning" if unreachable else "info",
+                   action="save those pages as .html/.pdf into data/manual/warning_letters/" if unreachable else "",
+                   detail="; ".join(unreachable[:3]))
     df = pd.DataFrame(recs)
     if df.empty:
         QLOG.check("warning_letters", "documents_collected", 0, severity="warning",

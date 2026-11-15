@@ -1,36 +1,64 @@
 """
-Scenario layer + Layer-1 hand-off table.
+Scenario layer + locked-schema hand-off.
 
-1. Validates the explicitly-labelled SCENARIO assumptions (Plan section 3, item 3):
+1. Validates the explicitly-labelled SCENARIO assumptions (plan section 3, item 3):
      reference/scenario_corridor_assumptions.csv  (Hormuz sea / Gulf air shares, freight per vial)
      reference/price_benchmarks.csv               (public CMS ASP reimbursement benchmarks)
-2. Builds data/interim/quotes_2026_carboplatin.csv  (C1 inputs: unit price + freight + insurance)
-   - insurance rate is DATA-DRIVEN: median insurance/value ratio from cleaned SCMS lines
-3. Builds data/interim/layer1_scoring_panel_seed.csv - one row per qualified labeler with
-   plant country (+ evidence), corridor share, LPI/WGI, quote, capacity and preliminary
-   (exact-key) links to shortages / recalls / inspections / SCMS history.
-   Layer 2 (Member 2B) replaces the preliminary exact-key links with rapidfuzz resolution.
-
-Data issues handled: shares outside [0,1] or not summing to 1, duplicate countries,
-missing default row, labelers without plant country (falls back to override file, then
-'Unknown' + flag), quotes for labelers that no longer qualify (orphans), etc.
+2. Builds quotes_2026_carboplatin.csv (plan 4.3, C1): base unit price anchored to the public
+   reimbursement benchmark + deterministic origin-country air/sea freight + insurance.
+3. Links every panel labeler to shortages, recalls, inspections and SCMS history using
+   normalised corporate suffixes + rapidfuzz token_sort_ratio >= 88 (plan 5.2 step 3) and the
+   corporate alias table; every candidate link is written to entity_match_candidates.csv for
+   the plan's manual check.
+4. Writes data/processed/suppliers_matrix.csv in the LOCKED schema of plan 5.1 (same column
+   names, order and types). Columns owned by Layer 1 are filled; C1 and C5 are computed from
+   the plan's closed-form formulas (4.3, Normal mode); C2 / C4 / shap_top3_reasons belong to the
+   ML and NLP engines and are left empty for them; C3 defaults to 0.0 for probation vendors.
 """
 from __future__ import annotations
 
+import json
 import logging
+import re
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
-from .common import QLOG, Col, company_core, enforce_schema, write_table
+from .common import QLOG, Col, company_core, company_key, enforce_schema, write_table
 from .config import SETTINGS
+
+try:
+    from rapidfuzz import fuzz
+except ImportError:  # pipeline still runs; matching falls back to exact / phrase rules
+    fuzz = None
 
 log = logging.getLogger("pharmashield.ingestion.scenario")
 SRC = "scenario"
-DEFAULT_CAPACITY = 4000  # SCENARIO: vials/month per qualified maker unless overridden
+DEFAULT_CAPACITY = 4000  # SCENARIO: vials/month per maker unless overridden
+
+LOCKED_SCHEMA = [  # plan 5.1 - order and names are fixed
+    Col("sku_id", "str", nullable=False),
+    Col("criticality_tier", "int", nullable=False, allowed=(1, 2, 3)),
+    Col("manufacturer_id", "str", nullable=False, unique=True),
+    Col("labeler_name_fda", "str", nullable=False),
+    Col("manufacturing_country", "str", nullable=False),
+    Col("is_probation", "bool", nullable=False),
+    Col("monthly_capacity_units", "int", nullable=False, min=0),
+    Col("C1_landed_cost", "float", nullable=False, min=0, max=1),
+    Col("C2_delivery_risk", "float", min=0, max=1),      # filled by XGBoost (Member 4A)
+    Col("C3_price_integrity", "float", min=0, max=1),    # filled by Isolation Forest (Member 4A)
+    Col("C4_compliance_risk", "float", min=0, max=1),    # filled by NLP + FDA composite (Member 4B)
+    Col("C5_route_exposure", "float", nullable=False, min=0, max=1),
+    Col("hormuz_air_share", "float", nullable=False, min=0, max=1),
+    Col("active_fda_shortage", "bool", nullable=False),
+    Col("oai_count_5yr", "int", nullable=False, min=0),
+    Col("shap_top3_reasons", "str", nullable=False),     # JSON string; "[]" until SHAP runs
+]
+LOCKED_COLUMNS = [c.name for c in LOCKED_SCHEMA]
 
 
+# --------------------------------------------------------------------------- #
 def corridor_table(ref_dir: Path) -> pd.DataFrame:
     df = pd.read_csv(ref_dir / "scenario_corridor_assumptions.csv")
     problems = []
@@ -38,8 +66,7 @@ def corridor_table(ref_dir: Path) -> pd.DataFrame:
         problems.append(f"duplicate iso3 {df.loc[df.iso3.duplicated(), 'iso3'].tolist()}")
     if "*" not in set(df["iso3"]):
         problems.append("missing default row iso3='*'")
-    shares = ["air_share", "sea_share", "land_share", "hormuz_sea_fraction", "gulf_air_fraction"]
-    for c in shares:
+    for c in ["air_share", "sea_share", "land_share", "hormuz_sea_fraction", "gulf_air_fraction"]:
         if ((df[c] < 0) | (df[c] > 1)).any():
             problems.append(f"{c} outside [0,1]")
     tot = df[["air_share", "sea_share", "land_share"]].sum(axis=1)
@@ -60,8 +87,7 @@ def corridor_table(ref_dir: Path) -> pd.DataFrame:
 
 
 def _benchmark_for(core: str, bench: pd.DataFrame) -> pd.Series:
-    specific = bench[bench["applies_to_labeler_core"].ne("*")]
-    for _, b in specific.iterrows():
+    for _, b in bench[bench["applies_to_labeler_core"].ne("*")].iterrows():
         if isinstance(core, str) and b["applies_to_labeler_core"].upper() in core:
             return b
     return bench[bench["applies_to_labeler_core"].eq("*")].iloc[0]
@@ -80,67 +106,152 @@ def _insurance_rate(interim: Path) -> tuple[float, str]:
 
 def _read(interim: Path, name: str) -> pd.DataFrame:
     p = interim / f"{name}.csv"
-    return pd.read_csv(p, low_memory=False) if p.exists() and p.stat().st_size > 1 else pd.DataFrame()
+    if not p.exists() or p.stat().st_size <= 1:
+        return pd.DataFrame()
+    try:
+        return pd.read_csv(p, low_memory=False)
+    except pd.errors.EmptyDataError:
+        return pd.DataFrame()
 
 
+# --------------------------------------------------------------------------- #
+# Entity linking (plan 5.2 step 3)
+# --------------------------------------------------------------------------- #
+def _alias_map(ref_dir: Path, panel: pd.DataFrame) -> dict[str, list[tuple[str, str]]]:
+    p = ref_dir / "corporate_aliases.csv"
+    al = pd.read_csv(p, dtype=str) if p.exists() else pd.DataFrame(
+        columns=["labeler_core_contains", "alias_name", "relationship"])
+    out = {}
+    for _, lab in panel.iterrows():
+        names = [(lab["labeler_key"], "self")]
+        if isinstance(lab.get("parent_key"), str):
+            names.append((lab["parent_key"], "parent_in_fda_name"))
+        for _, a in al.iterrows():
+            if a["labeler_core_contains"].upper() in str(lab["labeler_key"]):
+                names.append((company_key(a["alias_name"]), a["relationship"]))
+        out[lab["labeler_key"]] = [(n, r) for n, r in dict(names).items() if isinstance(n, str)]
+    return out
+
+
+def match_names(panel: pd.DataFrame, raw_names: pd.Series, source: str,
+                aliases: dict[str, list[tuple[str, str]]]) -> pd.DataFrame:
+    """One row per accepted (labeler, external name) link, with method and score."""
+    thr = SETTINGS.sku.fuzzy_match_threshold
+    uniq = [n for n in pd.Series(raw_names).dropna().astype(str).unique() if n.strip()]
+    ext = [(n, company_key(n), company_core(n)) for n in uniq]
+    rows = []
+    for lab_key, targets in aliases.items():
+        prepared = []
+        for t, rel in targets:
+            tcore = company_core(t)
+            phrase = re.compile(rf"(?<![A-Z0-9]){re.escape(tcore)}(?![A-Z0-9])") \
+                if isinstance(tcore, str) and len(tcore) >= 4 else None
+            prepared.append((t, rel, tcore, phrase))
+        for raw, k, c in ext:
+            if not isinstance(k, str):
+                continue
+            best = None
+            for t, rel, tcore, phrase in prepared:
+                if c == tcore:
+                    cand = ("exact_normalised_name", 100.0)
+                else:
+                    score = float(fuzz.token_sort_ratio(t, k)) if fuzz else 0.0
+                    if score >= thr:
+                        cand = ("rapidfuzz_token_sort_ratio", score)
+                    elif phrase is not None and phrase.search(k):
+                        cand = ("core_name_contained", 90.0)
+                    else:
+                        continue
+                if best is None or cand[1] > best[1]:
+                    best = (*cand, t, rel)
+            if best:
+                rows.append({"labeler_key": lab_key, "source": source, "external_name": raw,
+                             "match_method": best[0], "score": best[1], "matched_via": best[2],
+                             "relationship": best[3],
+                             "needs_manual_check": best[0] != "exact_normalised_name" or best[3] != "self"})
+    return pd.DataFrame(rows, columns=["labeler_key", "source", "external_name", "match_method", "score",
+                                       "matched_via", "relationship", "needs_manual_check"])
+
+
+def _count(panel: pd.DataFrame, links: pd.DataFrame, df: pd.DataFrame, name_cols: list[str]) -> pd.Series:
+    """Rows of df whose name (any of name_cols) is linked to each labeler."""
+    if df.empty or links.empty:
+        return pd.Series(0, index=panel.index)
+    by_lab = links.groupby("labeler_key")["external_name"].agg(set)
+    cols = [c for c in name_cols if c in df.columns]
+    out = []
+    for k in panel["labeler_key"]:
+        names = by_lab.get(k, set())
+        mask = pd.Series(False, index=df.index)
+        for c in cols:
+            mask |= df[c].astype(str).isin(names)
+        out.append(int(mask.sum()))
+    return pd.Series(out, index=panel.index)
+
+
+# --------------------------------------------------------------------------- #
 def build(ref_dir: Path, interim: Path) -> dict[str, pd.DataFrame]:
     sku = SETTINGS.sku
     corr = corridor_table(ref_dir)
     bench = pd.read_csv(ref_dir / "price_benchmarks.csv")
     over = pd.read_csv(ref_dir / "manufacturer_overrides.csv", dtype=str)
+    hints_p = ref_dir / "labeler_country_hints.csv"
+    hints = pd.read_csv(hints_p, dtype=str) if hints_p.exists() else pd.DataFrame()
     labs = _read(interim, "fda_ndc_qualified_labelers")
     if labs.empty:
-        QLOG.check(SRC, "qualified_labelers_available", 1, severity="error",
+        QLOG.check(SRC, "panel_labelers_available", 1, severity="error",
                    detail="run openFDA ingestion first (or offline cache)")
         return {}
     labels = _read(interim, "fda_label_manufacturing_sites")
     wb = _read(interim, "wb_country_indicators")
 
-    # ---- plant country: override file > SPL label text > Unknown -------------------
-    country = {}
-    if not labels.empty:
-        for _, lab in labs.iterrows():
+    panel = labs[["sku_id", "labeler_key", "labeler_name_fda", "labeler_core", "parent_key",
+                  "authorization_type", "n_products", "product_ndcs", "marketing_categories"]].copy()
+    panel["criticality_tier"] = sku.criticality_tier
+
+    # ---- plant country: manual override > SPL label text > HQ hint > Unknown ----------
+    res = {}
+    for _, lab in labs.iterrows():
+        k = lab["labeler_key"]
+        if not labels.empty:
             sets = set(str(lab.get("spl_set_ids", "")).split("|"))
             hit = labels[labels["spl_set_id"].isin(sets) & labels["label_country"].notna()]
-            if hit.empty:  # fall back to same company key on the label
-                hit = labels[(labels["labeler_key"] == lab["labeler_key"]) & labels["label_country"].notna()]
+            if hit.empty:
+                hit = labels[(labels["labeler_key"] == k) & labels["label_country"].notna()]
             if not hit.empty:
-                top = hit["label_iso3"].value_counts()
-                iso = top.index[0]
+                iso = hit["label_iso3"].value_counts().index[0]
                 row = hit[hit["label_iso3"] == iso].iloc[0]
-                country[lab["labeler_key"]] = (row["label_country"], iso, "spl_label_text",
-                                               str(row["manufactured_by_snippet"])[:200],
-                                               len(top) > 1)
-    panel = labs[["sku_id", "labeler_key", "labeler_name_fda", "labeler_core", "parent_key",
-                  "n_products", "product_ndcs", "marketing_categories"]].copy()
-    panel["criticality_tier"] = sku.criticality_tier
-    panel["manufacturing_country"] = panel["labeler_key"].map(lambda k: country.get(k, (None,))[0])
-    panel["manufacturing_iso3"] = panel["labeler_key"].map(lambda k: country.get(k, (None, None))[1])
-    panel["country_source"] = panel["labeler_key"].map(lambda k: country.get(k, (None, None, None))[2])
-    panel["country_evidence"] = panel["labeler_key"].map(lambda k: country.get(k, (None,) * 4)[3])
-    panel["country_multiple_sites"] = panel["labeler_key"].map(lambda k: country.get(k, (None,) * 5)[4])
-    panel["monthly_capacity_units"] = DEFAULT_CAPACITY
-    panel["capacity_source"] = "SCENARIO default"
+                res[k] = (row["label_country"], iso, "spl_label_text", str(row["manufactured_by_snippet"])[:200])
+                continue
+        for _, h in hints.iterrows():
+            if h["labeler_core_contains"].upper() in str(k):
+                res[k] = (h["manufacturing_country"], h["iso3"], "hq_hint_verify", h["basis"])
+                break
     if not over.empty:
-        o = over.set_index("labeler_key")
-        for i, r in panel.iterrows():
-            if r["labeler_key"] in o.index:
-                ov = o.loc[r["labeler_key"]]
-                if isinstance(ov.get("manufacturing_country"), str) and ov["manufacturing_country"]:
-                    panel.loc[i, ["manufacturing_country", "manufacturing_iso3", "country_source",
-                                  "country_evidence"]] = [ov["manufacturing_country"], ov["iso3"],
-                                                          "manual_override", ov.get("evidence")]
-                if pd.notna(ov.get("monthly_capacity_units")):
-                    panel.loc[i, ["monthly_capacity_units", "capacity_source"]] = \
-                        [int(float(ov["monthly_capacity_units"])), "manual_override"]
+        for _, ov in over.iterrows():
+            if isinstance(ov.get("manufacturing_country"), str) and ov["manufacturing_country"].strip():
+                res[ov["labeler_key"]] = (ov["manufacturing_country"], ov["iso3"], "manual_override",
+                                          ov.get("evidence"))
+    for j, col in enumerate(["manufacturing_country", "manufacturing_iso3", "country_source", "country_evidence"]):
+        panel[col] = panel["labeler_key"].map(lambda k, j=j: res.get(k, (None,) * 4)[j])
     unk = panel["manufacturing_iso3"].isna()
     QLOG.check(SRC, "labelers_without_plant_country", int(unk.sum()), len(panel),
                action="DEFAULT corridor row used; add to reference/manufacturer_overrides.csv",
-               severity="warning" if unk.any() else "info",
-               detail=", ".join(panel.loc[unk, "labeler_name_fda"]))
+               severity="warning" if unk.any() else "info", detail=", ".join(panel.loc[unk, "labeler_name_fda"]))
+    hint = panel["country_source"].eq("hq_hint_verify")
+    QLOG.check(SRC, "plant_country_from_hq_hint", int(hint.sum()), len(panel), action="flagged - verify plant",
+               detail=", ".join(panel.loc[hint, "labeler_name_fda"]))
     panel["manufacturing_country"] = panel["manufacturing_country"].fillna("Unknown")
 
-    # ---- C5 inputs -------------------------------------------------------------------
+    panel["monthly_capacity_units"] = DEFAULT_CAPACITY
+    panel["capacity_source"] = "SCENARIO default"
+    if not over.empty and "monthly_capacity_units" in over:
+        cap = pd.to_numeric(over.set_index("labeler_key")["monthly_capacity_units"], errors="coerce").dropna()
+        m = panel["labeler_key"].map(cap)
+        panel.loc[m.notna(), "capacity_source"] = "manual_override"
+        panel["monthly_capacity_units"] = m.fillna(panel["monthly_capacity_units"]).astype(int)
+
+    # ---- corridor + World Bank ------------------------------------------------------------
     c = corr.set_index("iso3")
     look = panel["manufacturing_iso3"].where(panel["manufacturing_iso3"].isin(c.index), "*").fillna("*")
     panel["corridor_row_used"] = look
@@ -151,84 +262,136 @@ def build(ref_dir: Path, interim: Path) -> dict[str, pd.DataFrame]:
         panel["lpi_score"] = panel["manufacturing_iso3"].map(w["lpi_score"])
         panel["lpi_year"] = panel["manufacturing_iso3"].map(w["lpi_score_year"])
         panel["wgi_political_stability"] = panel["manufacturing_iso3"].map(w["wgi_political_stability"])
+        fallback_lpi = float(w["lpi_score"].median())
     else:
         panel[["lpi_score", "lpi_year", "wgi_political_stability"]] = np.nan
-    QLOG.check(SRC, "labelers_missing_lpi", int(panel["lpi_score"].isna().sum()), len(panel),
-               action="Layer 2: impute regional median + flag",
-               severity="warning" if panel["lpi_score"].isna().any() else "info")
+        fallback_lpi = 3.0
+    panel["lpi_imputed"] = panel["lpi_score"].isna()
+    QLOG.check(SRC, "labelers_missing_lpi", int(panel["lpi_imputed"].sum()), len(panel),
+               action=f"imputed with all-country median LPI {fallback_lpi:.2f} + flagged",
+               severity="warning" if panel["lpi_imputed"].any() else "info")
+    panel["lpi_score"] = panel["lpi_score"].fillna(fallback_lpi)
 
-    # ---- C1 quotes ---------------------------------------------------------------------
+    # ---- C1 quotes (plan 4.3) -----------------------------------------------------------------
     ins_rate, ins_basis = _insurance_rate(interim)
     q = []
     for _, r in panel.iterrows():
         b = _benchmark_for(r["labeler_core"], bench)
         unit = float(b["payment_limit_usd"]) * sku.reference_vial_mg / float(b["unit_mg"])
         q.append({"sku_id": r["sku_id"], "labeler_key": r["labeler_key"], "labeler_name_fda": r["labeler_name_fda"],
-                  "reference_vial": f"{sku.reference_vial_mg} mg / {sku.reference_vial_mg / sku.concentration_mg_per_ml:.0f} mL",
+                  "reference_vial": f"{sku.reference_vial_mg} mg / "
+                                    f"{sku.reference_vial_mg / sku.concentration_mg_per_ml:.0f} mL",
                   "base_unit_price_usd": round(unit, 2), "price_benchmark_id": b["benchmark_id"],
+                  "manufacturing_country": r["manufacturing_country"],
                   "freight_usd_per_vial": r["freight_usd_per_vial"],
                   "insurance_usd_per_vial": round(unit * ins_rate, 4), "insurance_rate": round(ins_rate, 5),
                   "insurance_basis": ins_basis, "corridor_row_used": r["corridor_row_used"],
                   "is_scenario_assumption": True})
     quotes = pd.DataFrame(q)
-    quotes["landed_cost_usd_per_vial"] = (quotes["base_unit_price_usd"] + quotes["freight_usd_per_vial"]
-                                          + quotes["insurance_usd_per_vial"]).round(4)
     user_q = ref_dir / "quotes_2026_carboplatin_override.csv"
     if user_q.exists():  # team-supplied tender quotes win, validated
         uq = pd.read_csv(user_q)
         orphan = ~uq["labeler_key"].isin(quotes["labeler_key"])
-        QLOG.check(SRC, "override_quotes_for_non_qualified_labelers", int(orphan.sum()), len(uq),
+        QLOG.check(SRC, "override_quotes_for_labelers_not_in_panel", int(orphan.sum()), len(uq),
                    action="ignored", severity="warning" if orphan.any() else "info")
         uq = uq[~orphan].drop_duplicates("labeler_key", keep="last").set_index("labeler_key")
         for col in ["base_unit_price_usd", "freight_usd_per_vial", "insurance_usd_per_vial"]:
             if col in uq:
-                m = quotes["labeler_key"].map(uq[col])
-                bad = m.notna() & ((m < 0) | (m > 1e5))
-                quotes[col] = np.where(m.notna() & ~bad, m, quotes[col])
-        quotes["landed_cost_usd_per_vial"] = quotes[["base_unit_price_usd", "freight_usd_per_vial",
-                                                     "insurance_usd_per_vial"]].sum(axis=1).round(4)
+                m = pd.to_numeric(quotes["labeler_key"].map(uq[col]), errors="coerce")
+                ok = m.notna() & (m >= 0) & (m <= 1e5)
+                quotes[col] = np.where(ok, m, quotes[col])
+    quotes["landed_cost_usd_per_vial"] = quotes[["base_unit_price_usd", "freight_usd_per_vial",
+                                                 "insurance_usd_per_vial"]].sum(axis=1).round(4)
     quotes = enforce_schema(quotes, [Col("labeler_key", "str", nullable=False, unique=True),
                                      Col("landed_cost_usd_per_vial", "float", nullable=False, min=0)], SRC)
     panel = panel.merge(quotes[["labeler_key", "base_unit_price_usd", "landed_cost_usd_per_vial"]],
                         on="labeler_key", how="left")
 
-    # ---- preliminary exact-key evidence links (Layer 2 refines with rapidfuzz) ----------
-    def _hits(df: pd.DataFrame, key_cols: list[str], mask=None) -> pd.Series:
-        if df.empty:
-            return pd.Series(0, index=panel.index)
-        d = df if mask is None else df[mask(df)]
-        keys = pd.concat([d[k] for k in key_cols if k in d], ignore_index=True).dropna()
-        cores = keys.map(company_core).value_counts()
-        return panel["labeler_core"].map(cores).fillna(0).astype(int)
-
+    # ---- entity links (rapidfuzz >= 88 + aliases) --------------------------------------------------
     sh = _read(interim, "fda_shortages_sku")
     rc = _read(interim, "fda_recalls_5yr")
     ins = _read(interim, "fda_inspections_drugs_5yr")
     scms = _read(interim, "scms_shipments_clean")
-    panel["prelim_active_shortage_records"] = _hits(sh, ["company_name", "parent_key"],
-                                                    lambda d: d["is_active"].astype(bool))
-    panel["prelim_class_i_ii_recalls_5yr"] = _hits(rc, ["recalling_firm"],
-                                                   lambda d: d["is_class_i_or_ii"].astype(bool))
-    panel["prelim_oai_5yr"] = _hits(ins, ["legal_name"], lambda d: d["classification_code"].eq("OAI"))
-    panel["prelim_vai_5yr"] = _hits(ins, ["legal_name"], lambda d: d["classification_code"].eq("VAI"))
-    if not scms.empty:
-        hist = pd.concat([scms["vendor"].map(company_core), scms["manufacturing_site"].map(company_core)])
-        first_tok = hist.dropna().str.split().str[0].value_counts()
-        panel["prelim_scms_shipments"] = panel["labeler_core"].str.split().str[0].map(first_tok).fillna(0).astype(int)
-    else:
-        panel["prelim_scms_shipments"] = 0
-    panel["is_probation"] = panel["prelim_scms_shipments"] < SETTINGS.scms.probation_min_shipments
-    panel["prelim_match_method"] = "exact core-key (replace with rapidfuzz in Layer 2)"
-    QLOG.check(SRC, "probation_labelers(<5 historical shipments)", int(panel["is_probation"].sum()), len(panel))
-    panel = enforce_schema(panel, [
-        Col("sku_id", "str", nullable=False), Col("criticality_tier", "int", allowed=(1, 2, 3)),
-        Col("labeler_key", "str", nullable=False, unique=True), Col("labeler_name_fda", "str", nullable=False),
-        Col("manufacturing_country", "str", nullable=False), Col("is_probation", "bool", nullable=False),
-        Col("monthly_capacity_units", "int", nullable=False, min=0),
-        Col("hormuz_air_share", "float", nullable=False, min=0, max=1),
-        Col("lpi_score", "float", min=1, max=5)], SRC)
+    wl = _read(interim, "warning_letters_corpus")
+    ct = _read(interim, "contracts_corpus")
+    aliases = _alias_map(ref_dir, panel)
+    QLOG.check(SRC, "rapidfuzz_available", 0 if fuzz else 1, severity="info" if fuzz else "warning",
+               action="" if fuzz else "pip install rapidfuzz - falling back to exact/phrase matching")
+
+    def col(df, c):
+        return df[c] if (not df.empty and c in df.columns) else pd.Series(dtype=str)
+
+    L = {
+        "shortages": match_names(panel, col(sh, "company_name"), "openfda_shortages", aliases),
+        "recalls": match_names(panel, col(rc, "recalling_firm"), "openfda_recalls", aliases),
+        "inspections": match_names(panel, col(ins, "legal_name"), "fda_inspections", aliases),
+        "scms": match_names(panel, pd.concat([col(scms, "vendor"), col(scms, "manufacturing_site")]),
+                            "scms", aliases),
+        "warning_letters": match_names(panel, col(wl, "company_name"), "warning_letters", aliases),
+        "contracts": match_names(panel, col(ct, "supplier_name"), "contracts", aliases),
+    }
+    links = pd.concat(L.values(), ignore_index=True)
+    QLOG.check(SRC, "entity_links_found", len(links), detail=str(links["source"].value_counts().to_dict()))
+    QLOG.check(SRC, "entity_links_needing_manual_check", int(links["needs_manual_check"].sum()), len(links),
+               action="review entity_match_candidates.csv (plan 5.2 step 3)")
+
+    active = sh[sh["is_active"].astype(bool)] if not sh.empty else sh
+    panel["active_shortage_records"] = _count(panel, L["shortages"], active, ["company_name"])
+    panel["active_fda_shortage"] = panel["active_shortage_records"] > 0
+    c12 = rc[rc["is_class_i_or_ii"].astype(bool)] if not rc.empty else rc
+    panel["recalls_class_i_ii_5yr"] = _count(panel, L["recalls"], c12, ["recalling_firm"])
+    panel["oai_count_5yr"] = _count(panel, L["inspections"],
+                                    ins[ins["classification_code"].eq("OAI")] if not ins.empty else ins,
+                                    ["legal_name"])
+    panel["vai_count_5yr"] = _count(panel, L["inspections"],
+                                    ins[ins["classification_code"].eq("VAI")] if not ins.empty else ins,
+                                    ["legal_name"])
+    panel["scms_historical_shipments"] = _count(panel, L["scms"], scms, ["vendor", "manufacturing_site"])
+    panel["warning_letters_linked"] = _count(panel, L["warning_letters"], wl, ["company_name"])
+    panel["contract_on_file"] = _count(panel, L["contracts"], ct, ["supplier_name"]) > 0
+    # plan 5.1: probation = fewer than 5 historical shipments in internal/SCMS logs
+    panel["is_probation"] = panel["scms_historical_shipments"] < SETTINGS.scms.probation_min_shipments
+    QLOG.check(SRC, "probation_labelers(<5 historical shipments)", int(panel["is_probation"].sum()), len(panel),
+               detail=", ".join(panel.loc[~panel["is_probation"], "labeler_name_fda"]) + " have history")
+    if ins.empty:
+        QLOG.check(SRC, "oai_count_without_inspection_data", len(panel), severity="warning",
+                   action="oai_count_5yr = 0 for all rows until inspections load")
+
+    # ---- locked-schema suppliers_matrix (plan 5.1) ----------------------------------------------------
+    lc = panel["landed_cost_usd_per_vial"]
+    rng = lc.max() - lc.min()
+    m = pd.DataFrame({
+        "sku_id": panel["sku_id"], "criticality_tier": panel["criticality_tier"],
+        "manufacturer_id": panel["labeler_key"], "labeler_name_fda": panel["labeler_name_fda"],
+        "manufacturing_country": panel["manufacturing_country"], "is_probation": panel["is_probation"],
+        "monthly_capacity_units": panel["monthly_capacity_units"],
+        # C1 (4.3): unit landed cost, min-max normalised to [0,1]; zero-guarded
+        "C1_landed_cost": ((lc - lc.min()) / rng).round(6) if rng > 0 else 0.0,
+        "C2_delivery_risk": np.nan,
+        # C3 (4.3): probation suppliers default to 0.0; others computed by Isolation Forest
+        "C3_price_integrity": np.where(panel["is_probation"], 0.0, np.nan),
+        "C4_compliance_risk": np.nan,
+        # C5 (4.3), Normal mode: min(1, StressFactor x share) x (1 - LPI / 5), StressFactor = 1.0
+        "C5_route_exposure": (np.minimum(1.0, 1.0 * panel["hormuz_air_share"])
+                              * (1 - panel["lpi_score"] / 5.0)).round(6),
+        "hormuz_air_share": panel["hormuz_air_share"], "active_fda_shortage": panel["active_fda_shortage"],
+        "oai_count_5yr": panel["oai_count_5yr"], "shap_top3_reasons": json.dumps([]),
+    })
+    assert list(m.columns) == LOCKED_COLUMNS
+    # supporting raw inputs, appended AFTER the 16 locked columns (never between them)
+    for extra in ["landed_cost_usd_per_vial", "lpi_score", "lpi_imputed", "wgi_political_stability",
+                  "vai_count_5yr", "recalls_class_i_ii_5yr", "active_shortage_records",
+                  "scms_historical_shipments", "warning_letters_linked", "contract_on_file",
+                  "authorization_type", "country_source", "capacity_source"]:
+        m[extra] = panel[extra].values
+    m = m.rename(columns={"landed_cost_usd_per_vial": "C1_landed_cost_usd_raw"})
+    m = enforce_schema(m, LOCKED_SCHEMA, "suppliers_matrix")
+    assert list(m.columns[:len(LOCKED_COLUMNS)]) == LOCKED_COLUMNS
+    for c_ in ["C2_delivery_risk", "C4_compliance_risk"]:
+        QLOG.check("suppliers_matrix", f"{c_}_pending_downstream_engine", int(m[c_].isna().sum()), len(m),
+                   action="left empty for Layer 3 (not a Layer 1 output)")
     return {"quotes_2026_carboplatin": quotes, "scenario_corridors_validated": corr,
-            "layer1_scoring_panel_seed": panel}
+            "layer1_scoring_panel_seed": panel, "entity_match_candidates": links, "suppliers_matrix": m}
 
 
 def run(ref_dir: Path, interim: Path, **_) -> dict:
@@ -238,8 +401,16 @@ def run(ref_dir: Path, interim: Path, **_) -> dict:
         log.exception("scenario/panel build failed")
         QLOG.status(SRC, "FAILED", note=str(e)[:200])
         return {}
-    out = {k: write_table(v, k) for k, v in tabs.items()}
-    if tabs:
-        QLOG.status(SRC, "OK", rows=len(tabs["layer1_scoring_panel_seed"]),
-                    note="panel seed + quotes built (SCENARIO-labelled)")
+    if not tabs:
+        QLOG.status(SRC, "FAILED", note="no panel labelers available")
+        return {}
+    processed = SETTINGS.paths.processed
+    out = {k: write_table(v, k) for k, v in tabs.items() if k != "suppliers_matrix"}
+    out["suppliers_matrix"] = write_table(tabs["suppliers_matrix"], "suppliers_matrix", processed)
+    out["quotes_2026_carboplatin_processed"] = write_table(tabs["quotes_2026_carboplatin"],
+                                                           "quotes_2026_carboplatin", processed)
+    m = tabs["suppliers_matrix"]
+    QLOG.status(SRC, "OK", rows=len(tabs["layer1_scoring_panel_seed"]), note="quotes + entity links built")
+    QLOG.status("suppliers_matrix", "OK", rows=len(m),
+                note=f"locked schema (plan 5.1); {int(m.is_probation.sum())} probation; C2/C4 pending Layer 3")
     return out

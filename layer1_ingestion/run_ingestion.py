@@ -11,6 +11,7 @@ PharmaShield GCC - Layer 1: Multi-Source Data Ingestion & Collection
 
 Outputs
     data/raw/         immutable JSON snapshots of every API response (audit trail)
+    data/processed/   suppliers_matrix.csv in the locked schema (plan 5.1) + quotes_2026_carboplatin.csv
     data/interim/     clean, schema-validated tables for Layers 2-4
     data/quarantine/  every rejected row with its reason code (nothing silently dropped)
     data/quality/     quality_report.md / .json / quality_checks.csv
@@ -26,13 +27,15 @@ import time
 from datetime import date
 from pathlib import Path
 
-from ingestion import documents, fda_inspections, openfda, scenario, scms, worldbank
+from ingestion import documents, fda_inspections, openfda, optional_sources, scenario, scms, worldbank
 from ingestion.common import QLOG, HttpClient, flush_quarantine, log, setup_logging, sha256_file, utc_now
 from ingestion.config import SETTINGS
 
 # order matters: scenario/panel reads the outputs of the others
 SOURCES = {
     "scms": scms.run,
+    "ghsc_psm": optional_sources.run_ghsc,
+    "internal": optional_sources.run_internal,
     "openfda": openfda.run,
     "inspections": fda_inspections.run,
     "worldbank": worldbank.run,
@@ -59,9 +62,9 @@ def main(argv: list[str] | None = None) -> int:
         as_of = json.loads((P.data / "manifest.json").read_text()).get("as_of")
     if as_of:  # identical windows => identical cached requests => reproducible replay
         object.__setattr__(SETTINGS, "as_of", date.fromisoformat(as_of))
-    for d in (P.raw, P.manual, P.interim, P.quarantine, P.quality):
+    for d in (P.raw, P.manual, P.interim, P.quarantine, P.quality, P.processed):
         d.mkdir(parents=True, exist_ok=True)
-    for sub in ("scms", "fda_inspections", "warning_letters", "contracts"):
+    for sub in ("scms", "fda_inspections", "warning_letters", "contracts", "ghsc_psm", "internal"):
         (P.manual / sub).mkdir(parents=True, exist_ok=True)
     setup_logging(a.log_level, P.quality / "ingestion.log")
     log.info("PharmaShield Layer 1 ingestion | as_of=%s | offline=%s | sources=%s",
@@ -100,6 +103,8 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  checks: {len(QLOG.records)} | warnings: {len(warns)} | errors: {len(errors)}")
     print(f"  quarantined rows: {sum(q_counts.values())} -> data/quarantine/")
     print("  report: data/quality/quality_report.md\n")
+    if (P.processed / "suppliers_matrix.csv").exists():
+        print("  locked-schema hand-off: data/processed/suppliers_matrix.csv\n")
     failed = any(st["status"] == "FAILED" for st in QLOG.source_status.values())
     return 1 if a.strict and (failed or errors) else 0
 

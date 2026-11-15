@@ -1,0 +1,49 @@
+SYNTHETIC DOCUMENT - PharmaShield GCC academic prototype (SP Jain MAIB, AI in Operations, Group 3).
+This is NOT a real agreement. All terms are invented for testing an NLP clause extractor and do not describe any actual contract of the named company.
+
+MASTER SUPPLY AGREEMENT No. PS-MSA-2026-003
+
+This Master Supply Agreement (the "Agreement") is made between Accord Healthcare, Inc. (the "Supplier") and Gulf Health Purchasing Consortium (a fictional UAE group purchasing organisation) (the "Buyer"), effective 1 January 2026 (the "Effective Date").
+
+1. PRODUCT AND TERRITORY
+1.1 The Supplier shall supply Carboplatin Injection 10 mg/mL (450 mg/45 mL multi-dose vials) (the "Product") manufactured at the Supplier's approved facility in India.
+1.2 Territory: United Arab Emirates. Delivery terms: DAP Dubai (Incoterms 2020).
+
+2. FORECASTS, ORDERS AND LEAD TIME
+2.1 The Buyer shall provide a rolling 6-month non-binding forecast. Purchase orders shall be placed against the forecast.
+2.2 Lead time: the Supplier shall deliver each purchase order within 45 calendar days of order acceptance.
+
+3. LATE DELIVERY
+3.1 If any delivery is late, the Supplier shall pay liquidated damages of 0.75% of the value of the late consignment per week of delay, capped at 10% of the annual contract value, without prejudice to the Buyer's right to procure substitute product at the Supplier's cost.
+
+4. EXCLUSIVITY
+4.1 Nothing in this Agreement obliges the Buyer to purchase exclusively from the Supplier; the Buyer may qualify and purchase from second and third sources at any time.
+
+5. SUPPLY CONTINUITY
+5.1 In the event of a supply shortage, the Supplier shall allocate available Product among its customers on a pro-rata basis by trailing 12-month volume.
+5.2 The Supplier shall maintain consignment safety stock equal to 30 days of forecast demand in a bonded warehouse in Dubai (Jebel Ali Free Zone or DAFZ).
+5.3 The Supplier shall notify the Buyer within 5 business days of any FDA Form 483, Warning Letter, Official Action Indicated classification, import alert or recall affecting the Product or its facility.
+
+6. PRICE
+6.1 Prices are fixed for the first 12 months of the Term. Thereafter adjustments are limited to the UAE CPI change, capped at 3% per year.
+
+7. QUALITY, SERIALISATION AND RECALLS
+7.1 The Product shall be manufactured in accordance with current Good Manufacturing Practice and the marketing authorisation registered with the UAE Ministry of Health and Prevention.
+7.2 Each pack shall carry GS1 DataMatrix serialisation compatible with the Tatmeen track-and-trace platform.
+7.3 The Supplier shall bear all costs of any recall caused by a quality defect attributable to the Supplier.
+
+8. FORCE MAJEURE
+8.1 Force Majeure shall mean natural disasters, epidemics declared by the WHO and acts of government that are not reasonably foreseeable at the Effective Date. Regional conflict, shipping-lane or airspace disruption in the Arabian Gulf and the Strait of Hormuz are deemed FORESEEABLE and do NOT constitute Force Majeure; the Supplier shall re-route via alternative ports (Khor Fakkan, Fujairah, Sohar) or alternative air hubs at its own cost. A party invoking Force Majeure must give notice within 48 hours and present a mitigation plan within 5 days.
+
+9. TERM AND TERMINATION
+9.1 The initial term is 36 months from the Effective Date.
+9.2 Either party may terminate for material breach not cured within 30 days. The Supplier may not terminate for convenience during the first 24 months.
+
+10. DATA PROTECTION
+10.1 Each party shall process personal data in accordance with Federal Decree-Law No. 45 of 2021 (UAE PDPL).
+
+11. GOVERNING LAW
+11.1 This Agreement is governed by the laws of the Emirate of Dubai and the federal laws of the UAE; disputes are referred to the DIFC Courts.
+
+Signed for and on behalf of the Supplier: [NAME], Authorised Signatory
+Signed for and on behalf of the Buyer: [NAME], Chief Procurement Officer

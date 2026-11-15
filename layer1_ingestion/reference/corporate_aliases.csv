@@ -1,0 +1,8 @@
+labeler_core_contains,alias_name,relationship,evidence
+EUGIA,Aurobindo Pharma Limited,parent,"Eugia Pharma Specialities is a wholly owned subsidiary of Aurobindo Pharma (company filings, Aug 2026)"
+EUGIA,Eugia Pharma Specialities Limited,manufacturing_entity,"FDA warning letters 320-24-55 and 320-26-115 are addressed to this entity"
+ACCORD,Intas Pharmaceuticals Limited,parent,"Accord Healthcare is the international arm of Intas Pharmaceuticals"
+HOSPIRA,Pfizer,parent,"openFDA shortages list 'Hospira, Inc., a Pfizer Company'"
+APOTEX,Teyro Labs Private Limited,contract_manufacturer,"Apotex carboplatin SPL label: 'Manufactured by: Teyro Labs Private Limited ... India'"
+FRESENIUS KABI,Fresenius Kabi Oncology Limited,affiliate,"Fresenius Kabi oncology manufacturing entity (FDA warning letters 2017)"
+TEVA,Teva Pharmaceutical Industries,parent,"Teva Parenteral Medicines is a Teva group company"

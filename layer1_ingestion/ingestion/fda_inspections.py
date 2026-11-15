@@ -6,7 +6,7 @@ Two ingestion paths, tried in order:
      needs free credentials (env FDA_DD_USER / FDA_DD_KEY, from the OII Unified Logon).
   B. Manual export dropped in data/manual/fda_inspections/ (several files fine; de-duplicated).
   C. Automatic: download FDA's published full dataset
-     https://datadashboard.fda.gov/InspectionsDataset.xlsx (no credentials) and stream-filter it
+     datadashboard.fda.gov InspectionsDataset.xlsx (no credentials) and stream-filter it
      to drug inspections in the look-back window. Cached in data/raw for offline replay.
 
 Data issues handled:
@@ -128,7 +128,8 @@ def _from_manual(manual_dir: Path) -> pd.DataFrame:
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
 
-PUBLIC_DATASET_URL = "https://datadashboard.fda.gov/InspectionsDataset.xlsx"
+PUBLIC_DATASET_URLS = ("https://datadashboard.fda.gov/InspectionsDataset.xlsx",
+                       "https://datadashboard.fda.gov/oii/cd/InspectionsDataset.xlsx")
 
 
 def _stream_xlsx_filtered(path: Path, cutoff: pd.Timestamp) -> pd.DataFrame:
@@ -171,9 +172,9 @@ def _from_public_dataset(http: HttpClient) -> pd.DataFrame:
     if not http.offline:
         import requests
         tmp = d / "InspectionsDataset__downloading.part"
-        for attempt in range(3):
+        for attempt, url in enumerate(PUBLIC_DATASET_URLS * 2):
             try:
-                with http.session.get(PUBLIC_DATASET_URL, stream=True, timeout=180,
+                with http.session.get(url, stream=True, timeout=180,
                                       headers={"Accept": "*/*"}) as r:
                     r.raise_for_status()
                     with open(tmp, "wb") as fh:
@@ -182,7 +183,7 @@ def _from_public_dataset(http: HttpClient) -> pd.DataFrame:
                 with open(tmp, "rb") as fh:  # .xlsx is a zip; an HTML error/block page is not
                     if fh.read(2) != b"PK":
                         raise ValueError("download is not an .xlsx file (blocked or error page)")
-                target = d / f"InspectionsDataset__{pd.Timestamp.utcnow():%Y%m%dT%H%M%SZ}.xlsx"
+                target = d / f"InspectionsDataset__{pd.Timestamp.now('UTC'):%Y%m%dT%H%M%SZ}.xlsx"
                 tmp.rename(target)
                 log.info("inspections: downloaded public dataset (%.1f MB)", target.stat().st_size / 1e6)
                 break

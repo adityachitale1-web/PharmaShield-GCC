@@ -24,6 +24,7 @@ class Paths:
     interim: Path = ROOT / "data" / "interim"    # clean, validated Layer-1 outputs
     quarantine: Path = ROOT / "data" / "quarantine"  # rejected rows + reason codes
     quality: Path = ROOT / "data" / "quality"    # data-quality reports
+    processed: Path = ROOT / "data" / "processed"  # locked-schema hand-off (plan 5.1)
     reference: Path = ROOT / "reference"         # curated lookup / scenario tables
 
 
@@ -35,6 +36,12 @@ class TargetSKU:
     criticality_tier: int = 1                    # Tier 1: Life-Critical (oncology)
     reference_vial_mg: int = 450                 # 450 mg / 45 mL = costing unit "vial"
     therapeutic_category: str = "Oncology"
+    # Plan 3 (item 2): the scoring panel is every labeler in the openFDA NDC directory for the
+    # molecule ("18 authorized labelers ... including Cipla, Hetero"). That count includes
+    # bulk-API (powder) listings. "all_ndc_labelers" follows the plan; each row is still tagged
+    # finished_injection vs bulk_api_only. Use "finished_injection_only" for the strict gate.
+    panel_scope: str = "all_ndc_labelers"
+    fuzzy_match_threshold: int = 88               # plan 5.2 step 3: token_sort_ratio >= 88
 
 
 @dataclass(frozen=True)

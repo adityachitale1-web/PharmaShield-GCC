@@ -28,8 +28,7 @@ FDA_DD_KEY = "..."
 
 **Locally:** `pip install -r requirements.txt` then `streamlit run streamlit_app.py`.
 
-In the app: pick sources in the sidebar, optionally upload the FDA inspections export, warning letters or contracts,
-then press **Run Layer 1**. Tabs show source status, every data-quality check, the scoring panel seed, all output
+In the app: press **Run Layer 1**. No uploads are needed; all inputs ship with the repo or download automatically. Tabs show source status, every data-quality check, the scoring panel seed, all output
 tables, quarantined rows and a one-click zip download of the outputs.
 
 ## Quick start (Layer 1, command line)
@@ -42,7 +41,7 @@ python run_ingestion.py --offline   # replay cached snapshots, no network
 python -m pytest -q
 ```
 
-Outputs land in `layer1_ingestion/data/interim/`. See the
+The locked-schema hand-off is `layer1_ingestion/data/processed/suppliers_matrix.csv`; other tables are in `data/interim/`. See the
 [Layer 1 README](layer1_ingestion/README.md) and the [data source catalogue](layer1_ingestion/DATA_SOURCES.md).
 
 ## Conventions

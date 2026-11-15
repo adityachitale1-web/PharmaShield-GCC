@@ -84,7 +84,7 @@ def report() -> dict | None:
 def zip_outputs() -> bytes:
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
-        for folder in (P.interim, P.quarantine, P.quality):
+        for folder in (P.processed, P.interim, P.quarantine, P.quality):
             for f in sorted(folder.glob("*")) if folder.exists() else []:
                 z.write(f, f.relative_to(P.data))
         if (P.data / "manifest.json").exists():
@@ -106,9 +106,11 @@ with st.sidebar:
     st.subheader("Manual inputs")
     insp = st.file_uploader("FDA inspections export (optional - downloaded automatically from FDA)",
                             type=["xlsx", "xls", "csv"], accept_multiple_files=True)
-    wl = st.file_uploader("Warning letters (urls.csv or saved .html/.pdf/.txt)",
+    st.caption("All three are optional: the repo already ships 51 warning-letter URLs and 11 synthetic "
+               "contracts, and FDA inspections are downloaded automatically.")
+    wl = st.file_uploader("Warning letters - extra (urls.csv or saved .html/.pdf/.txt)",
                           type=["csv", "txt", "html", "htm", "pdf"], accept_multiple_files=True)
-    ct = st.file_uploader("Supplier contracts (.txt/.md/.docx/.pdf)", type=["txt", "md", "docx", "pdf"],
+    ct = st.file_uploader("Supplier contracts - extra (.txt/.md/.docx/.pdf)", type=["txt", "md", "docx", "pdf"],
                           accept_multiple_files=True)
     run = st.button("▶ Run Layer 1", type="primary", width="stretch")
 
@@ -167,7 +169,8 @@ st.caption(f"Last run (UTC): {rep['generated_at_utc']} · as-of {man.get('as_of'
            f"cache replays {man.get('cache_replays')}")
 
 tab_over, tab_q, tab_panel, tab_tables, tab_quar, tab_dl = st.tabs(
-    ["Source status", "Data quality", "Scoring panel seed", "Output tables", "Quarantine", "Download"])
+    ["Source status", "Data quality", "suppliers_matrix (locked schema)", "Output tables", "Quarantine",
+     "Download"])
 
 with tab_over:
     def _colour(v):
@@ -200,24 +203,29 @@ with tab_q:
                      column_config={"detail": st.column_config.TextColumn(width="large")})
 
 with tab_panel:
-    panel = load(P.interim / "layer1_scoring_panel_seed.csv")
-    if panel.empty:
-        st.info("Panel seed not built yet - run 'openfda', 'worldbank' and 'scenario'.")
+    sm = load(P.processed / "suppliers_matrix.csv")
+    if sm.empty:
+        st.info("suppliers_matrix.csv not built yet - run 'openfda', 'worldbank' and 'scenario'.")
     else:
-        st.markdown("One row per qualified labeler. `prelim_*` links are exact-key only; "
-                    "Layer 2 replaces them with rapidfuzz entity resolution. SCENARIO columns are labelled assumptions.")
-        cols = [c for c in ["labeler_name_fda", "manufacturing_country", "country_source", "hormuz_air_share",
-                            "lpi_score", "wgi_political_stability", "base_unit_price_usd",
-                            "landed_cost_usd_per_vial", "monthly_capacity_units", "prelim_active_shortage_records",
-                            "prelim_class_i_ii_recalls_5yr", "prelim_oai_5yr", "prelim_vai_5yr",
-                            "prelim_scms_shipments", "is_probation"] if c in panel]
-        st.dataframe(panel[cols], width="stretch", hide_index=True)
-        unk = panel[panel["manufacturing_country"].eq("Unknown")]
+        locked = list(sm.columns[:16])
+        st.markdown("`data/processed/suppliers_matrix.csv` in the locked schema of plan §5.1 (first 16 columns, "
+                    "fixed names and order). Layer 1 fills identity, probation, capacity, C1, C5, corridor share, "
+                    "shortage flag and OAI count. **C2, C4 and SHAP reasons are left empty for the ML / NLP engines**; "
+                    "C3 defaults to 0.0 for probation vendors.")
+        st.dataframe(sm[locked], width="stretch", hide_index=True)
+        st.download_button("Download suppliers_matrix.csv", (P.processed / "suppliers_matrix.csv").read_bytes(),
+                           file_name="suppliers_matrix.csv", mime="text/csv", type="primary")
+        with st.expander("Supporting raw inputs (appended after the locked columns)"):
+            st.dataframe(sm[["manufacturer_id"] + list(sm.columns[16:])], width="stretch", hide_index=True)
+        unk = sm[sm["manufacturing_country"].eq("Unknown")]
         if len(unk):
             st.warning("Plant country unresolved for: " + ", ".join(unk["labeler_name_fda"]) +
                        " → add rows to `layer1_ingestion/reference/manufacturer_overrides.csv`.")
-        with st.expander("Evidence for plant country (label text)"):
-            st.dataframe(panel[["labeler_name_fda", "country_evidence"]], width="stretch", hide_index=True)
+        links = load(P.interim / "entity_match_candidates.csv")
+        if len(links):
+            with st.expander(f"Entity links for manual check ({int(links['needs_manual_check'].sum())} flagged)"):
+                st.dataframe(links.sort_values(["labeler_key", "source", "score"]), width="stretch",
+                             hide_index=True)
 
 with tab_tables:
     files = sorted(P.interim.glob("*.csv")) if P.interim.exists() else []

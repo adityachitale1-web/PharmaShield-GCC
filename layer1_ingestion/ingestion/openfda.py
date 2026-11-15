@@ -200,13 +200,28 @@ def ndc_products(http: HttpClient) -> pd.DataFrame:
     df["exclusion_reasons"] = reasons.str.rstrip(";")
     df["qualifies_for_sku"] = df["exclusion_reasons"].eq("")
     df["repackager_flag"] = df["is_original_packager"].eq(False)
-    quarantine("openfda_ndc", df[~df["qualifies_for_sku"]], "not_target_sku (see exclusion_reasons)")
+    # bulk-API listings of the same molecule (e.g. Cipla / Hetero carboplatin powder): not a
+    # finished-injection authorization, but part of the plan's "labelers in the NDC directory"
+    is_bulk = (df["finished"].eq(False) | df["product_type"].fillna("").str.upper().str.contains("BULK")
+               | df["dosage_form"].fillna("").str.upper().str.contains("POWDER"))
+    live = ~rules["listing_expired"].fillna(False) & ~rules["marketing_ended"].fillna(False)
+    single = ~rules["combination_or_wrong_molecule"].fillna(False)
+    df["authorization_type"] = np.where(df["qualifies_for_sku"], "finished_injection",
+                                        np.where(is_bulk & live & single, "bulk_api", "excluded"))
+    if sku.panel_scope == "all_ndc_labelers":
+        df["in_scoring_panel"] = df["authorization_type"].ne("excluded")
+    else:
+        df["in_scoring_panel"] = df["qualifies_for_sku"]
+    QLOG.check("openfda_ndc", "products_in_scoring_panel", int(df["in_scoring_panel"].sum()), len(df),
+               detail=f"panel_scope={sku.panel_scope}; "
+                      f"{df['authorization_type'].value_counts().to_dict()}")
+    quarantine("openfda_ndc", df[~df["in_scoring_panel"]], "not_in_scoring_panel (see exclusion_reasons)")
     df.insert(0, "sku_id", sku.sku_id)
     return df
 
 
 def ndc_labelers(products: pd.DataFrame) -> pd.DataFrame:
-    q = products[products["qualifies_for_sku"]]
+    q = products[products["in_scoring_panel"]]
     if q.empty:
         QLOG.check("openfda_ndc", "qualified_labelers", 0, severity="error",
                    detail="No labeler passed the SKU gate - check query/filters")
@@ -225,9 +240,15 @@ def ndc_labelers(products: pd.DataFrame) -> pd.DataFrame:
         spl_set_ids=("spl_set_id", lambda s: "|".join(sorted(set(s.dropna())))),
         strengths=("strength", lambda s: "|".join(sorted(set(s.dropna())))),
         any_repackager_listing=("repackager_flag", "any"),
+        holds_finished_injection_authorization=("qualifies_for_sku", "any"),
         earliest_marketing_start=("marketing_start_date", "min"),
         latest_listing_expiry=("listing_expiration_date", "max"),
     ).reset_index()
+    lab["authorization_type"] = np.where(lab["holds_finished_injection_authorization"],
+                                         "finished_injection", "bulk_api_only")
+    QLOG.check("openfda_ndc", "labelers_bulk_api_only", int((lab["authorization_type"] == "bulk_api_only").sum()),
+               len(lab), action="kept in panel + flagged (no finished-injection authorization)",
+               detail=", ".join(lab.loc[lab["authorization_type"] == "bulk_api_only", "labeler_name_fda"]))
     # same company under two spellings collapses here because the key ignores suffix/punctuation
     QLOG.check("openfda_ndc", "qualified_labelers", len(lab), detail=", ".join(lab["labeler_name_fda"]))
     QLOG.check("openfda_ndc", "labelers_with_multiple_name_spellings",
@@ -277,6 +298,10 @@ def label_manufacturing_sites(http: HttpClient, ref_dir: Path) -> pd.DataFrame:
                 m = pat.search(snip)
                 if m:
                     found.append((m.start(), ctry, iso, is_for))
+            # US addresses usually omit the country: 'Lake Forest, IL 60045'
+            us = re.search(r",\s*[A-Z]{2}\s+\d{5}(?:-\d{4})?\b", snip)
+            if us and not any(f[1] == "United States" for f in found):
+                found.append((us.start(), "United States", "USA", is_for))
             # earliest-mentioned country in each snippet = address country
         found.sort()
         mfg = [f for f in found if not f[3]]
@@ -449,7 +474,9 @@ def run(http: HttpClient, ref_dir: Path, **_) -> dict:
         out["fda_ndc_products"] = write_table(prods, "fda_ndc_products")
         out["fda_ndc_qualified_labelers"] = write_table(labs, "fda_ndc_qualified_labelers")
         QLOG.status("openfda_ndc", "OK", rows=len(labs),
-                    note=f"{int(prods.qualifies_for_sku.sum())} qualifying products / {len(labs)} labelers")
+                    note=f"{len(labs)} labelers in panel "
+                         f"({int((labs.authorization_type == 'finished_injection').sum())} finished injection, "
+                         f"{int((labs.authorization_type == 'bulk_api_only').sum())} bulk API only)")
 
     for name, fn, status_key in (("fda_label_manufacturing_sites",
                                   lambda: label_manufacturing_sites(http, ref_dir), "openfda_label"),
