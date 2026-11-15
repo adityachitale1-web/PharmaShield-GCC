@@ -104,8 +104,8 @@ with st.sidebar:
     crawl = st.number_input("Crawl FDA warning letters (0 = off)", 0, 200, 0, step=10)
 
     st.subheader("Manual inputs")
-    insp = st.file_uploader("FDA inspections export (.xlsx/.csv)", type=["xlsx", "xls", "csv"],
-                            accept_multiple_files=True)
+    insp = st.file_uploader("FDA inspections export (optional - downloaded automatically from FDA)",
+                            type=["xlsx", "xls", "csv"], accept_multiple_files=True)
     wl = st.file_uploader("Warning letters (urls.csv or saved .html/.pdf/.txt)",
                           type=["csv", "txt", "html", "htm", "pdf"], accept_multiple_files=True)
     ct = st.file_uploader("Supplier contracts (.txt/.md/.docx/.pdf)", type=["txt", "md", "docx", "pdf"],

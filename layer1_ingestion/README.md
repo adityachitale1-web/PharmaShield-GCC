@@ -28,7 +28,7 @@ Optional:
 | 3 | openFDA Drug Shortages | live API (SKU + all current oncology) | dashboard alerts, C4 penalty |
 | 4 | openFDA Drug Enforcement (recalls, 5 yrs) | live API, yearly windows | C4 recall component |
 | 5 | openFDA Drug Label (SPL text) | live API | plant country per labeler ("Manufactured by: … India") |
-| 6 | FDA Data Dashboard inspections (NAI/VAI/OAI) | API with credentials **or** manual export | C4 OAI/VAI component |
+| 6 | FDA Data Dashboard inspections (NAI/VAI/OAI) | automatic download of FDA's published dataset (or API / manual export) | C4 OAI/VAI component |
 | 7 | World Bank LPI + WGI Political Stability | live API | C5 route exposure |
 | 8 | FDA CGMP warning letters + supplier contracts | saved files / URL list / optional crawl | C4 NLP (Member 4B) |
 | 9 | Scenario assumptions (corridor shares, CMS ASP price benchmark) | `reference/*.csv` | C1, C5 |
@@ -83,9 +83,9 @@ suspicious-but-real values are kept and flagged; every decision is counted in th
 
 ## Manual inputs (one-time, ~10 minutes)
 
-1. **FDA inspections** — either request free API credentials (OII Unified Logon) and set `FDA_DD_USER`/`FDA_DD_KEY`,
-   or go to datadashboard.fda.gov → Inspections → filter *Product Type = Drugs*, last 5 years → export → save into
-   `data/manual/fda_inspections/`. Without it the run still completes but C4's OAI/VAI term is 0 (flagged as an error in the report).
+1. **FDA inspections** — nothing to do: the run downloads FDA's published full dataset
+   (`https://datadashboard.fda.gov/InspectionsDataset.xlsx`) and keeps drug inspections from the last 5 years.
+   API credentials (`FDA_DD_USER`/`FDA_DD_KEY`) or a manual export in `data/manual/fda_inspections/` take priority if present.
 2. **Warning letters (50–100 for Member 4B)** — put FDA letter URLs in `data/manual/warning_letters/urls.csv`
    (column `url`) and/or save letter pages as HTML/PDF there. `--crawl-warning-letters 80` tries the FDA index automatically,
    but fda.gov sometimes blocks scripts.

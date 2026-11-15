@@ -315,3 +315,51 @@ def test_scms_real_file():
     assert 0.10 < out["late"].mean() < 0.13
     feats, _ = scms.site_features(out)
     assert feats["first_shipment"].max() <= pd.Timestamp("2013-12-31")   # no test-period leakage
+
+
+# --------------------------------------------------------------------------- #
+# FDA inspections: automatic public-dataset download (no upload, no credentials)
+# --------------------------------------------------------------------------- #
+def test_inspections_public_download(tmp_path, monkeypatch):
+    import datetime as dt
+    import io as _io
+    from openpyxl import Workbook
+    from ingestion import fda_inspections as fi
+
+    wb = Workbook(); ws = wb.active
+    ws.append(["FDA Inspections Dataset - exported"])            # title row above header
+    ws.append(["FEI Number", "Legal Name", "City", "State", "Zip", "Country/Area", "Fiscal Year",
+               "Inspection ID", "Posted Citations", "Inspection End Date", "Classification",
+               "Project Area", "Product Type", "Additional Details"])
+    ws.append([3002807852, "Gland Pharma Limited", "Hyderabad", None, "500043", "India", 2025, 1234567, "Yes",
+               dt.datetime(2025, 3, 14), "Official Action Indicated (OAI)", "Drug Quality Assurance", "Drugs", None])
+    ws.append([1000123456, "Hospira, Inc.", "McPherson", "KS", "67460", "United States", 2024, 2234567, "No",
+               dt.datetime(2024, 6, 1), "No Action Indicated (NAI)", "Drug Quality Assurance", "Drugs", None])
+    ws.append([1000123456, "Hospira, Inc.", "McPherson", "KS", "67460", "United States", 2014, 1134567, "No",
+               dt.datetime(2014, 6, 1), "Official Action Indicated (OAI)", "Drug Quality Assurance", "Drugs", None])
+    ws.append([9999999, "Food Co", "X", None, "1", "United States", 2024, 3334567, "No",
+               dt.datetime(2024, 6, 1), "No Action Indicated (NAI)", "Foods", "Food/Cosmetics", None])
+    buf = _io.BytesIO(); wb.save(buf); blob = buf.getvalue()
+
+    class Stream:
+        status_code = 200
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def raise_for_status(self): pass
+        def iter_content(self, n): yield blob
+
+    paths = cfgmod.Paths(raw=tmp_path / "raw")
+    object.__setattr__(cfgmod.SETTINGS, "paths", paths)
+    try:
+        monkeypatch.setattr(requests.Session, "get", lambda self, *a, **k: Stream())
+        http = HttpClient(tmp_path / "raw")
+        df, mode = fi.build(http, tmp_path / "manual")
+        assert mode == "public_dataset_download"
+        assert set(df["legal_name"]) == {"Gland Pharma Limited", "Hospira, Inc."}   # food + 2014 dropped
+        assert set(df["classification_code"]) == {"OAI", "NAI"}
+        assert df["fei_number"].iloc[0] == "3002807852"
+        # offline replay uses the cached download
+        df2, mode2 = fi.build(HttpClient(tmp_path / "raw", offline=True), tmp_path / "manual")
+        assert len(df2) == 2 and mode2 == "public_dataset_download"
+    finally:
+        object.__setattr__(cfgmod.SETTINGS, "paths", cfgmod.Paths())

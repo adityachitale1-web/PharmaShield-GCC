@@ -4,9 +4,10 @@ Source 6 - FDA Data Dashboard inspection classifications (NAI / VAI / OAI) -> C4
 Two ingestion paths, tried in order:
   A. API  POST https://api-datadashboard.fda.gov/v1/inspections_classifications
      needs free credentials (env FDA_DD_USER / FDA_DD_KEY, from the OII Unified Logon).
-  B. Manual export: download "Inspections" from datadashboard.fda.gov (filter Product Type =
-     Drugs) and drop the .xlsx/.csv in data/manual/fda_inspections/. Several files are fine;
-     overlapping exports are de-duplicated.
+  B. Manual export dropped in data/manual/fda_inspections/ (several files fine; de-duplicated).
+  C. Automatic: download FDA's published full dataset
+     https://datadashboard.fda.gov/InspectionsDataset.xlsx (no credentials) and stream-filter it
+     to drug inspections in the look-back window. Cached in data/raw for offline replay.
 
 Data issues handled:
   * API short field names vs export long names ('FEINumber' vs 'FEI Number') -> one schema
@@ -127,6 +128,79 @@ def _from_manual(manual_dir: Path) -> pd.DataFrame:
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
 
+PUBLIC_DATASET_URL = "https://datadashboard.fda.gov/InspectionsDataset.xlsx"
+
+
+def _stream_xlsx_filtered(path: Path, cutoff: pd.Timestamp) -> pd.DataFrame:
+    """Read the (large) full dashboard export row by row and keep only drug rows inside the
+    look-back window, so memory stays small even on Streamlit Community Cloud."""
+    from openpyxl import load_workbook
+    wb = load_workbook(path, read_only=True, data_only=True)
+    ws = wb.worksheets[0]
+    header, idx, rows = None, {}, []
+    for r in ws.iter_rows(values_only=True):
+        if header is None:
+            if r and any(isinstance(v, str) and "FEI" in v.upper() for v in r):
+                header = [str(v).strip() if v is not None else "" for v in r]
+                snk = [snake(h) for h in header]
+                pt = next((i for i, h in enumerate(snk) if h in ("product_type", "producttype")), None)
+                dt = next((i for i, h in enumerate(snk) if h in ("inspection_end_date", "inspectionenddate")), None)
+                idx = {"pt": pt, "dt": dt}
+            continue
+        if idx.get("pt") is not None:
+            v = r[idx["pt"]] if idx["pt"] < len(r) else None
+            if v is not None and "drug" not in str(v).lower():
+                continue
+        if idx.get("dt") is not None:
+            d = pd.to_datetime(r[idx["dt"]] if idx["dt"] < len(r) else None, errors="coerce")
+            if pd.notna(d) and d < cutoff:
+                continue
+        rows.append(r[:len(header)])
+    wb.close()
+    if header is None:
+        raise ValueError("header row with 'FEI' not found in dashboard export")
+    return pd.DataFrame(rows, columns=header).astype(str).replace({"None": None, "nan": None})
+
+
+def _from_public_dataset(http: HttpClient) -> pd.DataFrame:
+    """Download FDA's published full inspections dataset (no credentials needed)."""
+    d = SETTINGS.paths.raw / "fda_dashboard"
+    d.mkdir(parents=True, exist_ok=True)
+    cached = sorted(d.glob("InspectionsDataset__*.xlsx"))
+    target = None
+    if not http.offline:
+        import requests
+        tmp = d / "InspectionsDataset__downloading.part"
+        for attempt in range(3):
+            try:
+                with http.session.get(PUBLIC_DATASET_URL, stream=True, timeout=180,
+                                      headers={"Accept": "*/*"}) as r:
+                    r.raise_for_status()
+                    with open(tmp, "wb") as fh:
+                        for chunk in r.iter_content(1 << 20):
+                            fh.write(chunk)
+                with open(tmp, "rb") as fh:  # .xlsx is a zip; an HTML error/block page is not
+                    if fh.read(2) != b"PK":
+                        raise ValueError("download is not an .xlsx file (blocked or error page)")
+                target = d / f"InspectionsDataset__{pd.Timestamp.utcnow():%Y%m%dT%H%M%SZ}.xlsx"
+                tmp.rename(target)
+                log.info("inspections: downloaded public dataset (%.1f MB)", target.stat().st_size / 1e6)
+                break
+            except (requests.RequestException, ValueError, OSError) as e:
+                log.warning("public inspections download attempt %d failed: %s", attempt + 1, e)
+        if target is None and tmp.exists():
+            tmp.unlink()
+    if target is None and cached:
+        target = cached[-1]
+        log.warning("inspections: using cached public dataset %s", target.name)
+    if target is None:
+        return pd.DataFrame()
+    cutoff = pd.Timestamp(SETTINGS.as_of) - pd.DateOffset(years=SETTINGS.dashboard.lookback_years)
+    df = _stream_xlsx_filtered(target, cutoff)
+    df["source_file"] = f"public:{target.name}"
+    return df
+
+
 def build(http: HttpClient, manual_dir: Path) -> tuple[pd.DataFrame, str]:
     cfg = SETTINGS.dashboard
     raw, mode = pd.DataFrame(), "none"
@@ -138,6 +212,13 @@ def build(http: HttpClient, manual_dir: Path) -> tuple[pd.DataFrame, str]:
     if raw.empty:
         raw = _from_manual(manual_dir)
         mode = "manual_export" if not raw.empty else "none"
+    if raw.empty:
+        try:
+            raw = _from_public_dataset(http)
+            mode = "public_dataset_download" if not raw.empty else "none"
+        except Exception as e:
+            log.warning("public inspections dataset failed: %s", e)
+            QLOG.check(SRC, "public_dataset_unreadable", 1, severity="warning", detail=str(e)[:200])
     if raw.empty:
         QLOG.check(SRC, "source_available", 1, severity="error",
                    action="C4 OAI/VAI component will be 0 - add export or API credentials",
