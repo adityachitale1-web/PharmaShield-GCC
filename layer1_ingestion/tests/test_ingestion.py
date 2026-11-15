@@ -392,14 +392,17 @@ def test_suppliers_matrix_locked_schema(http, tmp_path):
     write_table(sku_sh, "fda_shortages_sku", interim)
     write_table(openfda.recalls(http), "fda_recalls_5yr", interim)
     write_table(worldbank.build(http), "wb_country_indicators", interim)
+    I = dict(country="India", inspection_end_date="2025-03-14")
     pd.DataFrame([
-        {"fei_number": "1", "legal_name": "Gland Pharma Ltd", "classification_code": "OAI"},
-        {"fei_number": "1", "legal_name": "Gland Pharma Ltd", "classification_code": "VAI"},
-        {"fei_number": "2", "legal_name": "Aurobindo Pharma Limited Unit IV", "classification_code": "OAI"},
-        {"fei_number": "3", "legal_name": "Glandular Foods Inc", "classification_code": "OAI"},
+        {"fei_number": "1", "legal_name": "Gland Pharma Ltd", "classification_code": "OAI", **I},
+        {"fei_number": "1", "legal_name": "Gland Pharma Ltd", "classification_code": "VAI", **I},
+        {"fei_number": "9", "legal_name": "Gland Pharma Ltd", "classification_code": "NAI", **I},   # 2nd plant
+        {"fei_number": "2", "legal_name": "Aurobindo Pharma Limited Unit IV", "classification_code": "OAI", **I},
+        {"fei_number": "3", "legal_name": "Glandular Foods Inc", "classification_code": "OAI", **I},
     ]).to_csv(interim / "fda_inspections_drugs_5yr.csv", index=False)
     pd.DataFrame({"id": range(12), "vendor": ["SCMS from RDC"] * 12, "line_item_value": 100.0,
-                  "insurance_usd": 0.2, "insurance_imputed": False,
+                  "insurance_usd": 0.2, "insurance_imputed": False, "time_split": "train",
+                  "late": [1, 0, 0, 0, 0, 0, 0] + [0] * 5, "delay_days": [4, 0, 0, 0, 0, 0, 0] + [0] * 5,
                   "manufacturing_site": ["Aurobindo Unit III, India"] * 7 + ["Cipla, Goa, India"] * 5,
                   }).to_csv(interim / "scms_shipments_clean.csv", index=False)
 
@@ -425,6 +428,27 @@ def test_suppliers_matrix_locked_schema(http, tmp_path):
     assert (m["shap_top3_reasons"].map(json.loads).map(type) == list).all()         # valid JSON string
     assert m.loc["CIPLA", "manufacturing_country"] == "India"
     assert tabs["entity_match_candidates"]["needs_manual_check"].any()
+    # plan 4.1: plant-level rollup so C4 can take the worst plant
+    fac = tabs["panel_facility_inspections"]
+    g = fac[fac.labeler_key == "GLAND PHARMA"].set_index("fei_number")
+    assert len(g) == 2 and g.loc["1", "worst_classification"] == "OAI" and g.loc["9", "worst_classification"] == "NAI"
+    assert m.loc["GLAND PHARMA", "n_fda_inspected_plants"] == 2
+    # plan 4.3: FDA part of C4 = 0.30 I(OAI) + 0.10 I(VAI) + 0.20 min(1, recalls/2); Gland has 1 Class I recall
+    assert m.loc["GLAND PHARMA", "C4_fda_component_partial"] == pytest.approx(0.30 + 0.10 + 0.10)
+    # plan 4.2: crisis mode = 1.5x corridor share capped at 1
+    assert m.loc["GLAND PHARMA", "C5_route_exposure_crisis"] == pytest.approx(1.0 * (1 - 3.4 / 5), abs=1e-6)
+    # plan 3.1: one inference row per manufacturer with the C2 model's feature names
+    inf = tabs["panel_inference_features"].set_index("manufacturer_id")
+    assert len(inf) == len(m)
+    for c in ["manufacturing_country", "shipment_mode", "freight_to_value_ratio", "weight_kg", "vendor_inco_term",
+              "site_prior_on_time_rate"]:
+        assert c in inf.columns
+    assert inf.loc["EUGIA US", "site_prior_on_time_rate"] == pytest.approx(6 / 7)   # Aurobindo history
+    assert not inf.loc["GLAND PHARMA", "site_prior_available"]
+    # plan 5.2 step 3: shortlist for the manual check, capped at 20
+    top = tabs["entity_match_top20_manual_check"]
+    assert 0 < len(top) <= 20 and top["needs_manual_check"].all() and "decision" in top.columns
+
 
 
 def test_scms_site_features_have_plan_metrics():
@@ -438,3 +462,29 @@ def test_scms_site_features_have_plan_metrics():
     assert (out["late"] == (out["delivered_to_client_date"] > out["scheduled_delivery_date"]).astype(int)).all()
     steps = [r for r in common.QLOG.records if r["check"].startswith("step:")]
     assert len(steps) == 8 and all("class balance" in r["detail"] or "late=" in r["detail"] or "target" in r["detail"] for r in steps)
+
+
+def test_locked_schema_reference_file_matches_code():
+    from ingestion import scenario
+    ref = pd.read_csv(ROOT / "reference" / "locked_schema.csv")
+    assert ref["column"].tolist() == scenario.LOCKED_COLUMNS == PLAN_LOCKED_COLUMNS
+    assert ref["dtype"].tolist() == [c.dtype for c in scenario.LOCKED_SCHEMA]
+
+
+def test_manual_reject_removes_link(http, tmp_path):
+    from ingestion import scenario
+    panel = pd.DataFrame([{"labeler_key": "GLAND PHARMA", "parent_key": None}])
+    al = scenario._alias_map(ROOT / "reference", panel)
+    links = scenario.match_names(panel, pd.Series(["Gland Pharma Ltd", "Gland Chemicals Private Limited",
+                                                   "Glandular Foods Inc"]), "fda_inspections", al)
+    assert set(links["external_name"]) == {"Gland Pharma Ltd", "Gland Chemicals Private Limited"}
+    assert links.set_index("external_name").loc["Gland Chemicals Private Limited", "needs_manual_check"]
+
+
+def test_corridor_features_train_only():
+    if not REAL.exists():
+        pytest.skip("real SCMS file not present")
+    out = scms.clean_scms(REAL, ROOT / "reference")
+    cf = scms.corridor_features(out)
+    assert {"manufacturing_country", "shipment_mode", "corridor_on_time_rate", "corridor_p90_delay_days"} <= set(cf)
+    assert cf["corridor_n_shipments"].sum() == (out["time_split"] == "train").sum()

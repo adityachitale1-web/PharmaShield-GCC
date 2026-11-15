@@ -31,6 +31,13 @@ FDA_DD_KEY = "..."
 In the app: press **Run Layer 1**. No uploads are needed; all inputs ship with the repo or download automatically. Tabs show source status, every data-quality check, the scoring panel seed, all output
 tables, quarantined rows and a one-click zip download of the outputs.
 
+Dashboard tabs: Overview (source status, shortage alert, plan-vs-live figures) · **Data schema (§5.1)** with a pass / fail
+per column · suppliers_matrix.csv · Data feeds (§3.2) · 360° manufacturer profile · Build steps 1–3 · Data quality ·
+Output tables · Quarantine · Download.
+
+Notebook: `notebooks/01_layer1_data_ingestion.ipynb`. GenAI prompt log: `docs/GENAI_PROMPT_LOG_layer1.md`.
+Line-by-line plan check: `layer1_ingestion/PLAN_COMPLIANCE.md`.
+
 ## Quick start (Layer 1, command line)
 
 ```bash
@@ -41,11 +48,11 @@ python run_ingestion.py --offline   # replay cached snapshots, no network
 python -m pytest -q
 ```
 
-The locked-schema hand-off is `layer1_ingestion/data/processed/suppliers_matrix.csv`; other tables are in `data/interim/`. See the
+The locked-schema hand-off is `data/processed/suppliers_matrix.csv` at the repo root (plan §5.1); other tables are in `layer1_ingestion/data/interim/`. See the
 [Layer 1 README](layer1_ingestion/README.md) and the [data source catalogue](layer1_ingestion/DATA_SOURCES.md).
 
 ## Conventions
 
-* Generated data (`data/raw`, `data/interim`, `data/quarantine`, `data/quality`) is not committed. Re-run the pipeline instead.
+* Generated data (`data/processed`, `layer1_ingestion/data/{raw,interim,quarantine,quality}`) is not committed. Re-run the pipeline instead.
 * Every layer reads the previous layer's `data/interim/` tables; don't edit them by hand.
 * GenAI disclosure (plan §6.1): AI-assisted code is marked and logged in the GenAI Prompt Log.

@@ -1,0 +1,17 @@
+position,column,dtype,definition_and_validation_rule,filled_by,how_layer1_fills_it
+1,sku_id,str,"Standardized SKU key (e.g., ""CARBOPLATIN_INJ_10MG_ML"")",Layer 1,Fixed SKU key from config
+2,criticality_tier,int,"1 (Life-Critical), 2 (Essential), or 3 (Routine)",Layer 1,Tier 1 - oncology on the WHO Essential Medicines List (reference/sku_master.csv)
+3,manufacturer_id,str,Canonical manufacturer name after rapidfuzz resolution and manual verification,Layer 1 + manual check (2B),Suffix-normalised labeler name; links in entity_match_candidates.csv
+4,labeler_name_fda,str,Exact authorized labeler_name from openFDA NDC Directory,Layer 1,Copied verbatim from the NDC record
+5,manufacturing_country,str,"Primary manufacturing facility country (e.g., India, Germany, United States)",Layer 1,Manual override > SPL label 'Manufactured by' text > HQ hint (flagged) > Unknown
+6,is_probation,bool,True if supplier has fewer than 5 historical shipments in internal/SCMS logs,Layer 1,Linked SCMS shipments + internal deliveries < 5
+7,monthly_capacity_units,int,Maximum monthly vial supply capacity (hard constraint in PuLP),Layer 1 (SCENARIO),"Default 4,000 vials; reference/manufacturer_overrides.csv"
+8,C1_landed_cost,float,"Normalized landed cost score in [0, 1] alongside raw USD unit landed cost",Layer 1,Min-max of unit price + freight + insurance per vial; raw USD in C1_landed_cost_usd_raw
+9,C2_delivery_risk,float,"XGBoost predicted probability of late delivery in [0, 1]",Layer 3 - Member 4A,Empty; inputs in panel_inference_features.csv
+10,C3_price_integrity,float,"Isolation Forest share of flagged anomalous lines in [0, 1]",Layer 3 - Member 4A,0.0 for probation vendors (plan default); others empty
+11,C4_compliance_risk,float,"Composite FDA inspection + recall + NLP warning letter + contract risk in [0, 1]",Layer 3 - Member 4B,Empty; FDA part pre-computed in C4_fda_component_partial
+12,C5_route_exposure,float,"Chokepoint corridor share weighted by World Bank LPI in [0, 1]",Layer 1,"min(1, 1.0 x hormuz_air_share) x (1 - LPI / 5), Normal mode"
+13,hormuz_air_share,float,"Raw proportion of volume transiting Hormuz sea or Gulf air lanes in [0, 1]",Layer 1 (SCENARIO),reference/scenario_corridor_assumptions.csv by plant country
+14,active_fda_shortage,bool,True if manufacturer has an active shortage record in openFDA Shortages API,Layer 1,Any linked shortage record with active status
+15,oai_count_5yr,int,Count of Official Action Indicated (OAI) FDA inspection citations in past 5 years,Layer 1,OAI rows in the FDA inspections dataset linked to the manufacturer
+16,shap_top3_reasons,str,JSON string storing top 3 SHAP feature attributions for C2_delivery_risk,Layer 3 - Member 4A,"""[]"" placeholder (valid JSON)"

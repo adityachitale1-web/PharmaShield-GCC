@@ -494,8 +494,9 @@ def run(http: HttpClient, ref_dir: Path, **_) -> dict:
         out["fda_shortages_sku"] = write_table(sku_sh, "fda_shortages_sku")
         out["fda_shortages_oncology_current"] = write_table(onc_sh, "fda_shortages_oncology_current")
         QLOG.status("openfda_shortages", "OK", rows=len(sku_sh),
-                    note=f"{int(sku_sh['is_active'].sum()) if len(sku_sh) else 0} active SKU records; "
-                         f"{onc_sh['generic_name'].str.lower().nunique() if len(onc_sh) else 0} oncology molecules")
+                    note=f"{len(sku_sh)} SKU records ({int(sku_sh['is_active'].sum()) if len(sku_sh) else 0} active); "
+                         f"oncology current: {len(onc_sh)} records / "
+                         f"{onc_sh['generic_name'].str.lower().nunique() if len(onc_sh) else 0} molecules")
     except Exception as e:
         log.exception("shortages failed")
         QLOG.status("openfda_shortages", "FAILED", note=str(e)[:200])

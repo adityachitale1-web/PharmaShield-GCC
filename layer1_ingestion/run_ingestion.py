@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import platform
 import sys
 import time
@@ -89,7 +90,7 @@ def main(argv: list[str] | None = None) -> int:
         "python": platform.python_version(), "sku": SETTINGS.sku.__dict__,
         "http_calls": http.calls, "cache_replays": http.cache_hits, "timings_s": timings,
         "quarantined_rows": q_counts,
-        "outputs": {k: {"path": str(Path(v).relative_to(P.root)), "sha256": sha256_file(Path(v))}
+        "outputs": {k: {"path": os.path.relpath(v, P.root), "sha256": sha256_file(Path(v))}
                     for k, v in outputs.items() if v and Path(v).exists()},
     }
     (P.data / "manifest.json").write_text(json.dumps(manifest, indent=2, default=str))
@@ -104,7 +105,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  quarantined rows: {sum(q_counts.values())} -> data/quarantine/")
     print("  report: data/quality/quality_report.md\n")
     if (P.processed / "suppliers_matrix.csv").exists():
-        print("  locked-schema hand-off: data/processed/suppliers_matrix.csv\n")
+        print(f"  locked-schema hand-off: {P.processed / 'suppliers_matrix.csv'}\n")
     failed = any(st["status"] == "FAILED" for st in QLOG.source_status.values())
     return 1 if a.strict and (failed or errors) else 0
 

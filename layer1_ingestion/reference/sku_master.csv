@@ -1,0 +1,2 @@
+sku_id,molecule,dosage_form,concentration,criticality_tier,tier_basis,monthly_demand_units
+CARBOPLATIN_INJ_10MG_ML,Carboplatin,Injection,10 mg/mL,1,"Oncology medicine on the WHO Model List of Essential Medicines (cytotoxic medicines) - Tier 1 Life-Critical per plan 4.2",10000

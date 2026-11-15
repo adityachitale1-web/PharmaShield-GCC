@@ -9,7 +9,7 @@ analysis-ready tables for Layer 2 (entity fusion), Layer 3 (C1–C5 engines) and
 pip install -r requirements.txt
 python run_ingestion.py                 # live run (≈2–4 min; openFDA + World Bank)
 python run_ingestion.py --offline       # replay cached API snapshots, no network (demo / audit)
-python -m pytest -q                     # 20 offline tests
+python -m pytest -q                     # 23 offline tests
 ```
 
 Optional:
@@ -35,7 +35,7 @@ Optional:
 
 Full catalogue with URLs, fields and licences: **[DATA_SOURCES.md](DATA_SOURCES.md)**. Line-by-line check against the plan: **[PLAN_COMPLIANCE.md](PLAN_COMPLIANCE.md)**.
 
-## The hand-off file (`data/processed/`)
+## The hand-off file (`data/processed/` at the repository root)
 
 `suppliers_matrix.csv` uses the **locked schema of plan §5.1** (16 columns, fixed names and order). Layer 1 fills
 identity, country, probation, capacity, C1, C5, corridor share, shortage flag and OAI count. `C2_delivery_risk`,
@@ -59,6 +59,11 @@ identity, country, probation, capacity, C1, C5, corridor share, shortage flag an
 | `quotes_2026_carboplatin.csv` | labeler (C1 inputs, SCENARIO-labelled) | Member 3 |
 | `layer1_scoring_panel_seed.csv` | labeler, all raw panel fields | Member 2B |
 | `entity_match_candidates.csv` | labeler × external name, match method and score, `needs_manual_check` | Member 2B |
+| `entity_match_top20_manual_check.csv` | the plan's "manual check on top 20"; decisions go in `reference/entity_match_decisions.csv` | Member 2B |
+| `panel_inference_features.csv` | one feature row per manufacturer for C2 `predict_proba` (plan §3.1) | Member 4A |
+| `panel_facility_inspections.csv` | manufacturer × plant (FEI): OAI / VAI / NAI, worst classification (plan §4.1) | Member 4B |
+| `scms_corridor_features_train.csv` | origin country × shipment mode priors | Member 4A |
+| `plan_vs_live_reconciliation.csv` | figures quoted in the plan next to this run's figures | Member 1 (slides) |
 | `ghsc_psm_shipments_clean.csv`, `internal_*.csv` | only if those optional files are supplied | Members 4A, 2B |
 
 Also: `data/raw/` (immutable API snapshots), `data/quarantine/*_rejected.csv` (every rejected row + reason),

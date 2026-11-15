@@ -1,0 +1,4 @@
+criticality_tier,tier_name,clinical_examples,mandatory_sourcing_rule,max_primary_share,probation_trial_min,probation_trial_max,w_C1,w_C2,w_C3,w_C4,w_C5
+1,Life-Critical,"Oncology (Carboplatin), insulin, vaccines, anaesthetics",Minimum 2 qualified makers; max 70% to primary vendor; 5-10% probation trial; highest safety stock,0.70,0.05,0.10,0.10,0.30,0.05,0.30,0.25
+2,Essential,"Antibiotics, cardiovascular therapies",Qualified backup required; max 80% to primary vendor; 5-10% probation trial,0.80,0.05,0.10,0.20,0.25,0.10,0.25,0.20
+3,Routine,"Common analgesics, OTC products",Cost-led award; 100% single-source permitted if compliance passes,1.00,0.05,0.10,0.40,0.20,0.10,0.20,0.10

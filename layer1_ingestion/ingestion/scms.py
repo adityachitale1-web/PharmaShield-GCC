@@ -462,6 +462,23 @@ def site_features(clean: pd.DataFrame) -> pd.DataFrame:
     return feats, ctry
 
 
+def corridor_features(clean: pd.DataFrame) -> pd.DataFrame:
+    """Plan 5.2 step 2 'Site & Corridor features': origin country x shipment mode, TRAIN rows only."""
+    tr = clean[clean["time_split"] == "train"]
+    g = tr.groupby(["manufacturing_country", "manufacturing_iso3", "shipment_mode"], dropna=False)
+    out = g.agg(
+        corridor_n_shipments=("id", "size"),
+        corridor_on_time_rate=("late", lambda s: 1 - s.mean()),
+        corridor_mean_delay_days=("delay_days", "mean"),
+        corridor_p90_delay_days=("delay_days", lambda s: s.quantile(0.9)),
+        corridor_mean_freight_to_value=("freight_to_value_ratio", "mean"),
+        corridor_unit_price_variance=("unit_price", "var"),
+        corridor_median_weight_kg=("weight_kg", "median"),
+    ).reset_index()
+    out["corridor_low_history"] = out["corridor_n_shipments"] < SETTINGS.scms.probation_min_shipments
+    return out
+
+
 def run(manual_dir: Path, offline: bool = False, **_) -> dict:
     candidates = sorted([p for p in (manual_dir / "scms").glob("*")
                          if p.suffix.lower() in {".csv", ".xlsx", ".xls"}])
@@ -475,7 +492,8 @@ def run(manual_dir: Path, offline: bool = False, **_) -> dict:
     feats, ctry = site_features(clean)
     out = {"scms_shipments_clean": write_table(clean, "scms_shipments_clean"),
            "scms_site_features_train": write_table(feats, "scms_site_features_train"),
-           "scms_country_priors_train": write_table(ctry, "scms_country_priors_train")}
+           "scms_country_priors_train": write_table(ctry, "scms_country_priors_train"),
+           "scms_corridor_features_train": write_table(corridor_features(clean), "scms_corridor_features_train")}
     QLOG.status(SRC, "OK", rows=len(clean), note=f"late rate {clean['late'].mean():.1%}; "
                 f"{(clean.time_split == 'train').sum()} train / {(clean.time_split == 'test').sum()} test")
     return out

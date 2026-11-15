@@ -24,7 +24,10 @@ class Paths:
     interim: Path = ROOT / "data" / "interim"    # clean, validated Layer-1 outputs
     quarantine: Path = ROOT / "data" / "quarantine"  # rejected rows + reason codes
     quality: Path = ROOT / "data" / "quality"    # data-quality reports
-    processed: Path = ROOT / "data" / "processed"  # locked-schema hand-off (plan 5.1)
+    # plan 5.1: data/processed/suppliers_matrix.csv at the REPOSITORY root, where the
+    # TOPSIS/LP engine and the Streamlit cockpit read it. Falls back to this package's own
+    # data/ folder when Layer 1 is used on its own (e.g. from the zip).
+    processed: Path = (ROOT.parent if (ROOT.parent / "streamlit_app.py").exists() else ROOT) / "data" / "processed"
     reference: Path = ROOT / "reference"         # curated lookup / scenario tables
 
 
@@ -42,6 +45,11 @@ class TargetSKU:
     # finished_injection vs bulk_api_only. Use "finished_injection_only" for the strict gate.
     panel_scope: str = "all_ndc_labelers"
     fuzzy_match_threshold: int = 88               # plan 5.2 step 3: token_sort_ratio >= 88
+    manual_check_top_n: int = 20                  # plan 5.2 step 3: manual check on top 20
+    monthly_demand_units: int = 10000             # plan 4.4: default monthly demand D
+    # SCENARIO inputs for feature-based C2 inference (plan 3.1) - labelled as assumptions
+    vial_gross_weight_kg: float = 0.12            # 45 mL glass vial + carton share
+    panel_inco_term: str = "DDP"                  # delivered terms; SCMS has only 9 DAP rows
 
 
 @dataclass(frozen=True)

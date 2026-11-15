@@ -256,6 +256,7 @@ def build(ref_dir: Path, interim: Path) -> dict[str, pd.DataFrame]:
     look = panel["manufacturing_iso3"].where(panel["manufacturing_iso3"].isin(c.index), "*").fillna("*")
     panel["corridor_row_used"] = look
     panel["hormuz_air_share"] = look.map(c["hormuz_air_share"]).round(4)
+    panel["air_share"] = look.map(c["air_share"]).round(4)
     panel["freight_usd_per_vial"] = look.map(c["freight_usd_per_vial"]).round(4)
     if not wb.empty:
         w = wb.set_index("iso3")
@@ -311,6 +312,8 @@ def build(ref_dir: Path, interim: Path) -> dict[str, pd.DataFrame]:
     sh = _read(interim, "fda_shortages_sku")
     rc = _read(interim, "fda_recalls_5yr")
     ins = _read(interim, "fda_inspections_drugs_5yr")
+    if not ins.empty and "fei_number" in ins:   # FEI is an identifier, not a number
+        ins["fei_number"] = ins["fei_number"].astype("string").str.replace(r"\.0$", "", regex=True)
     scms = _read(interim, "scms_shipments_clean")
     wl = _read(interim, "warning_letters_corpus")
     ct = _read(interim, "contracts_corpus")
@@ -330,6 +333,23 @@ def build(ref_dir: Path, interim: Path) -> dict[str, pd.DataFrame]:
         "warning_letters": match_names(panel, col(wl, "company_name"), "warning_letters", aliases),
         "contracts": match_names(panel, col(ct, "supplier_name"), "contracts", aliases),
     }
+    internal_po = _read(interim, "internal_erp_purchase_orders")
+    L["internal"] = match_names(panel, col(internal_po, "supplier_name"), "internal_gpo", aliases)
+    # manual verification (plan 5.2 step 3): reviewer decisions override the automatic links
+    dec_p = ref_dir / "entity_match_decisions.csv"
+    dec = pd.read_csv(dec_p, dtype=str) if dec_p.exists() else pd.DataFrame(
+        columns=["labeler_key", "external_name", "decision"])
+    dec["decision"] = dec["decision"].fillna("").str.strip().str.lower()
+    dmap = {(r["labeler_key"], r["external_name"]): r["decision"] for _, r in dec.iterrows()}
+    n_rej = 0
+    for name, df_ in L.items():
+        df_["manual_decision"] = [dmap.get((a, b), "") for a, b in zip(df_["labeler_key"], df_["external_name"])]
+        rej = df_["manual_decision"].eq("reject")
+        n_rej += int(rej.sum())
+        df_.loc[df_["manual_decision"].eq("accept"), "needs_manual_check"] = False
+        L[name] = df_[~rej].copy()
+    QLOG.check(SRC, "entity_links_rejected_by_reviewer", n_rej, action="removed before counting",
+               detail=f"{len(dec)} decision row(s) in reference/entity_match_decisions.csv")
     links = pd.concat(L.values(), ignore_index=True)
     QLOG.check(SRC, "entity_links_found", len(links), detail=str(links["source"].value_counts().to_dict()))
     QLOG.check(SRC, "entity_links_needing_manual_check", int(links["needs_manual_check"].sum()), len(links),
@@ -350,12 +370,88 @@ def build(ref_dir: Path, interim: Path) -> dict[str, pd.DataFrame]:
     panel["warning_letters_linked"] = _count(panel, L["warning_letters"], wl, ["company_name"])
     panel["contract_on_file"] = _count(panel, L["contracts"], ct, ["supplier_name"]) > 0
     # plan 5.1: probation = fewer than 5 historical shipments in internal/SCMS logs
-    panel["is_probation"] = panel["scms_historical_shipments"] < SETTINGS.scms.probation_min_shipments
+    panel["internal_historical_deliveries"] = _count(panel, L["internal"], internal_po, ["supplier_name"])
+    panel["historical_shipments_total"] = panel["scms_historical_shipments"] + panel["internal_historical_deliveries"]
+    panel["is_probation"] = panel["historical_shipments_total"] < SETTINGS.scms.probation_min_shipments
     QLOG.check(SRC, "probation_labelers(<5 historical shipments)", int(panel["is_probation"].sum()), len(panel),
                detail=", ".join(panel.loc[~panel["is_probation"], "labeler_name_fda"]) + " have history")
     if ins.empty:
         QLOG.check(SRC, "oai_count_without_inspection_data", len(panel), severity="warning",
                    action="oai_count_5yr = 0 for all rows until inspections load")
+
+    # ---- manual-check shortlist: top N non-exact links, compliance sources first (plan step 3) ------
+    prio = {"fda_inspections": 0, "openfda_recalls": 1, "openfda_shortages": 2, "warning_letters": 3,
+            "scms": 4, "internal_gpo": 5, "contracts": 6}
+    todo = links[links["needs_manual_check"]].copy()
+    todo["_p"] = todo["source"].map(prio).fillna(9)
+    top_n = (todo.sort_values(["_p", "score", "labeler_key"]).drop(columns="_p")
+             .head(sku.manual_check_top_n).assign(decision="", reviewer_note=""))
+
+    # ---- facility-level inspections (plan 4.1: C4 = worst severity across all plants) ------------------
+    fac_cols = ["labeler_key", "fei_number", "legal_name", "country", "n_classifications", "oai_5yr", "vai_5yr",
+                "nai_5yr", "last_inspection_end_date", "worst_classification", "match_method"]
+    fac = pd.DataFrame(columns=fac_cols)
+    if not ins.empty and not L["inspections"].empty:
+        j = L["inspections"].merge(ins, left_on="external_name", right_on="legal_name")
+        if not j.empty:
+            rank = {"NAI": 0, "VAI": 1, "OAI": 2}
+            j["_r"] = j["classification_code"].map(rank)
+            fac = j.groupby(["labeler_key", "fei_number", "legal_name"], dropna=False).agg(
+                country=("country", "first"), n_classifications=("classification_code", "size"),
+                oai_5yr=("classification_code", lambda x: int((x == "OAI").sum())),
+                vai_5yr=("classification_code", lambda x: int((x == "VAI").sum())),
+                nai_5yr=("classification_code", lambda x: int((x == "NAI").sum())),
+                last_inspection_end_date=("inspection_end_date", "max"),
+                worst_classification=("_r", lambda x: {v: k for k, v in rank.items()}.get(x.max())),
+                match_method=("match_method", "first")).reset_index()[fac_cols]
+    panel["n_fda_inspected_plants"] = panel["labeler_key"].map(fac.groupby("labeler_key").size()).fillna(0).astype(int)
+
+    # ---- feature rows for C2 feature-based inference (plan 3.1) --------------------------------------
+    ctry_pri = _read(interim, "scms_country_priors_train")
+    corr_pri = _read(interim, "scms_corridor_features_train")
+    inf = pd.DataFrame({
+        "sku_id": panel["sku_id"], "manufacturer_id": panel["labeler_key"],
+        "labeler_name_fda": panel["labeler_name_fda"],
+        "manufacturing_country": panel["manufacturing_country"], "manufacturing_iso3": panel["manufacturing_iso3"],
+        "shipment_mode": np.where(panel["air_share"] >= 0.5, "Air", "Ocean"),
+        "is_air": panel["air_share"] >= 0.5, "air_share": panel["air_share"],
+        "freight_to_value_ratio": (panel["freight_usd_per_vial"] / panel["base_unit_price_usd"]).round(6),
+        "line_item_quantity": sku.monthly_demand_units,
+        "line_item_value": (sku.monthly_demand_units * panel["base_unit_price_usd"]).round(2),
+        "unit_price": panel["base_unit_price_usd"],
+        "weight_kg": round(sku.monthly_demand_units * sku.vial_gross_weight_kg, 1),
+        "vendor_inco_term": sku.panel_inco_term, "product_group": "ONCOLOGY_INJ",
+    })
+    if not scms.empty and {"late", "delay_days", "time_split"} <= set(scms.columns) and not L["scms"].empty:
+        by_lab = L["scms"].groupby("labeler_key")["external_name"].agg(set)
+        tr = scms[scms["time_split"] == "train"]
+        pri = []
+        for k in panel["labeler_key"]:
+            names = by_lab.get(k, set())
+            rows_ = tr[tr["vendor"].astype(str).isin(names) | tr["manufacturing_site"].astype(str).isin(names)]
+            pri.append((len(rows_), 1 - rows_["late"].mean() if len(rows_) else np.nan,
+                        rows_["delay_days"].mean() if len(rows_) else np.nan,
+                        rows_["delay_days"].quantile(0.9) if len(rows_) else np.nan))
+        inf[["site_prior_n_shipments", "site_prior_on_time_rate", "site_prior_mean_delay_days",
+             "site_prior_p90_delay_days"]] = pd.DataFrame(pri, index=inf.index)
+    else:
+        inf["site_prior_n_shipments"] = 0
+        for c_ in ["site_prior_on_time_rate", "site_prior_mean_delay_days", "site_prior_p90_delay_days"]:
+            inf[c_] = np.nan
+    inf["site_prior_available"] = inf["site_prior_n_shipments"] >= SETTINGS.scms.probation_min_shipments
+    if not ctry_pri.empty:
+        cp = ctry_pri.set_index("manufacturing_country")
+        for c_ in ["country_n_shipments", "country_on_time_rate", "country_air_share",
+                   "country_mean_freight_to_value"]:
+            inf[c_] = inf["manufacturing_country"].map(cp[c_]) if c_ in cp else np.nan
+    if not corr_pri.empty:
+        kp = corr_pri.set_index(["manufacturing_country", "shipment_mode"])
+        idx = list(zip(inf["manufacturing_country"], inf["shipment_mode"]))
+        for c_ in ["corridor_n_shipments", "corridor_on_time_rate", "corridor_p90_delay_days"]:
+            inf[c_] = [kp[c_].get(i, np.nan) for i in idx]
+    inf["scenario_fields"] = "shipment_mode|air_share|freight_to_value_ratio|weight_kg|vendor_inco_term"
+    QLOG.check(SRC, "c2_inference_rows_without_site_prior", int((~inf["site_prior_available"]).sum()), len(inf),
+               action="use country / corridor prior (plan 3.1 'where available')")
 
     # ---- locked-schema suppliers_matrix (plan 5.1) ----------------------------------------------------
     lc = panel["landed_cost_usd_per_vial"]
@@ -379,10 +475,17 @@ def build(ref_dir: Path, interim: Path) -> dict[str, pd.DataFrame]:
     })
     assert list(m.columns) == LOCKED_COLUMNS
     # supporting raw inputs, appended AFTER the 16 locked columns (never between them)
-    for extra in ["landed_cost_usd_per_vial", "lpi_score", "lpi_imputed", "wgi_political_stability",
-                  "vai_count_5yr", "recalls_class_i_ii_5yr", "active_shortage_records",
-                  "scms_historical_shipments", "warning_letters_linked", "contract_on_file",
-                  "authorization_type", "country_source", "capacity_source"]:
+    # Crisis mode (plan 4.2): corridor exposure x 1.5 stress factor, capped at 1.0
+    panel["C5_route_exposure_crisis"] = (np.minimum(1.0, 1.5 * panel["hormuz_air_share"])
+                                         * (1 - panel["lpi_score"] / 5.0)).round(6)
+    # FDA-only part of C4 (plan 4.3); the two NLP terms (0.20 + 0.20) are added by Member 4B
+    panel["C4_fda_component_partial"] = (0.30 * (panel["oai_count_5yr"] > 0) + 0.10 * (panel["vai_count_5yr"] > 0)
+                                         + 0.20 * np.minimum(1, panel["recalls_class_i_ii_5yr"] / 2)).round(4)
+    for extra in ["landed_cost_usd_per_vial", "C5_route_exposure_crisis", "C4_fda_component_partial",
+                  "lpi_score", "lpi_imputed", "wgi_political_stability",
+                  "vai_count_5yr", "recalls_class_i_ii_5yr", "n_fda_inspected_plants", "active_shortage_records",
+                  "scms_historical_shipments", "internal_historical_deliveries", "warning_letters_linked",
+                  "contract_on_file", "authorization_type", "country_source", "capacity_source"]:
         m[extra] = panel[extra].values
     m = m.rename(columns={"landed_cost_usd_per_vial": "C1_landed_cost_usd_raw"})
     m = enforce_schema(m, LOCKED_SCHEMA, "suppliers_matrix")
@@ -391,7 +494,43 @@ def build(ref_dir: Path, interim: Path) -> dict[str, pd.DataFrame]:
         QLOG.check("suppliers_matrix", f"{c_}_pending_downstream_engine", int(m[c_].isna().sum()), len(m),
                    action="left empty for Layer 3 (not a Layer 1 output)")
     return {"quotes_2026_carboplatin": quotes, "scenario_corridors_validated": corr,
-            "layer1_scoring_panel_seed": panel, "entity_match_candidates": links, "suppliers_matrix": m}
+            "layer1_scoring_panel_seed": panel, "entity_match_candidates": links,
+            "entity_match_top20_manual_check": top_n, "panel_facility_inspections": fac,
+            "panel_inference_features": inf, "suppliers_matrix": m}
+
+
+def plan_vs_live(interim: Path, matrix: pd.DataFrame) -> pd.DataFrame:
+    """Figures the plan quotes (section 3) next to what this run actually returned."""
+    def n(name):
+        return len(_read(interim, name))
+    onc = _read(interim, "fda_shortages_oncology_current")
+    labs = _read(interim, "fda_ndc_qualified_labelers")
+    fin = int((labs["authorization_type"] == "finished_injection").sum()) if len(labs) else 0
+    rows = [
+        ("SCMS shipments in training layer", "~10,300", n("scms_shipments_clean"),
+         "raw file has 10,324 lines; rejected rows are in data/quarantine"),
+        ("Carboplatin labelers in openFDA NDC directory", "18", len(labs),
+         f"{fin} hold a finished-injection listing, {len(labs) - fin} are bulk-API only"),
+        ("Carboplatin shortage records (openFDA)", "35", n("fda_shortages_sku"),
+         "after keeping the latest status row per company + package"),
+        ("Active oncology shortages", "84", len(onc),
+         f"{onc['generic_name'].str.lower().nunique() if len(onc) else 0} distinct molecules; "
+         "the plan does not say whether 84 counts records or molecules"),
+        ("FDA CGMP warning letters collected", "50-100", n("warning_letters_corpus"), "51 URLs shipped"),
+        ("Manufacturers in suppliers_matrix.csv", "18", len(matrix), "one row per manufacturer x SKU"),
+    ]
+    out = pd.DataFrame(rows, columns=["item", "plan_figure", "this_run", "note"])
+    def status(r):
+        if r["this_run"] == 0:
+            return "no data this run"
+        nums = [int(x.replace(",", "")) for x in re.findall(r"[\d,]+", r["plan_figure"])]
+        if "~" in r["plan_figure"]:
+            return "matches" if abs(r["this_run"] - nums[0]) <= 0.02 * nums[0] else "differs"
+        if len(nums) == 2:
+            return "matches" if nums[0] <= r["this_run"] <= nums[1] else "differs"
+        return "matches" if r["this_run"] == nums[0] else "differs - use the live figure on slides"
+    out["status"] = out.apply(status, axis=1)
+    return out
 
 
 def run(ref_dir: Path, interim: Path, **_) -> dict:
@@ -410,6 +549,12 @@ def run(ref_dir: Path, interim: Path, **_) -> dict:
     out["quotes_2026_carboplatin_processed"] = write_table(tabs["quotes_2026_carboplatin"],
                                                            "quotes_2026_carboplatin", processed)
     m = tabs["suppliers_matrix"]
+    pvl = plan_vs_live(interim, m)
+    out["plan_vs_live_reconciliation"] = write_table(pvl, "plan_vs_live_reconciliation")
+    diff = pvl[pvl["status"].str.startswith("differs")]
+    QLOG.check(SRC, "plan_figures_that_differ_from_live_data", len(diff), len(pvl),
+               severity="warning" if len(diff) else "info", action="quote the live figure on slides",
+               detail="; ".join(f"{r['item']}: plan {r['plan_figure']} vs {r['this_run']}" for _, r in diff.iterrows()))
     QLOG.status(SRC, "OK", rows=len(tabs["layer1_scoring_panel_seed"]), note="quotes + entity links built")
     QLOG.status("suppliers_matrix", "OK", rows=len(m),
                 note=f"locked schema (plan 5.1); {int(m.is_probation.sum())} probation; C2/C4 pending Layer 3")

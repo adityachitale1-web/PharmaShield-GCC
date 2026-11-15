@@ -6,3 +6,6 @@ venv/
 .env
 .DS_Store
 .ipynb_checkpoints/
+
+# generated outputs (re-run the pipeline)
+/data/
