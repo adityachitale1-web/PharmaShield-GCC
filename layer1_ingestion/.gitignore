@@ -1,0 +1,7 @@
+__pycache__/
+.pytest_cache/
+data/raw/
+data/interim/
+data/quarantine/
+data/quality/
+data/manifest.json

@@ -1,0 +1,3 @@
+benchmark_id,applies_to_labeler_core,hcpcs_code,description,unit_mg,payment_limit_usd,effective_from,effective_to,source_url,note
+CMS_ASP_J9045_2026Q4,*,J9045,"Injection, carboplatin, 50 mg",50,3.101,2026-10-01,2026-12-31,https://hcpcs.codes/drugs/10-2026/?page=27,"CMS Medicare Part B payment limit (= ASP + 6%) - public reimbursement benchmark for multi-source generic carboplatin"
+CMS_ASP_J9278_2026Q4,AVYXA,J9278,"Injection, carboplatin (avyxa), 1 mg",1,5.226,2026-10-01,2026-12-31,https://hcpcs.codes/drugs/10-2026/?page=30,"Separate HCPCS code for the AVYXA 505(b)(2) NDA ready-to-dilute product"

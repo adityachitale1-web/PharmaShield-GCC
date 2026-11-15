@@ -1,0 +1,49 @@
+country,iso3,aliases
+India,IND,INDIA|IND|Republic of India
+United States,USA,USA|U.S.A.|United States of America|U.S.|Puerto Rico
+China,CHN,CHINA|P.R. China|People's Republic of China|PRC
+Germany,DEU,GERMANY|Deutschland
+Austria,AUT,AUSTRIA
+Switzerland,CHE,SWITZERLAND
+Italy,ITA,ITALY
+France,FRA,FRANCE
+Spain,ESP,SPAIN
+Portugal,PRT,PORTUGAL
+United Kingdom,GBR,UK|U.K.|England|Scotland|Wales|Great Britain
+Ireland,IRL,IRELAND
+Netherlands,NLD,NETHERLANDS|The Netherlands|Holland
+Belgium,BEL,BELGIUM
+Denmark,DNK,DENMARK
+Sweden,SWE,SWEDEN
+Norway,NOR,NORWAY
+Finland,FIN,FINLAND
+Poland,POL,POLAND
+Czechia,CZE,Czech Republic|CZECH REPUBLIC
+Hungary,HUN,HUNGARY
+Romania,ROU,ROMANIA
+Slovenia,SVN,SLOVENIA
+Croatia,HRV,CROATIA
+Greece,GRC,GREECE
+Cyprus,CYP,CYPRUS
+Israel,ISR,ISRAEL
+Turkey,TUR,TURKEY|Türkiye|Turkiye
+Jordan,JOR,JORDAN
+Saudi Arabia,SAU,SAUDI ARABIA|KSA
+United Arab Emirates,ARE,UAE|U.A.E.|UNITED ARAB EMIRATES
+Egypt,EGY,EGYPT
+South Africa,ZAF,SOUTH AFRICA
+Japan,JPN,JAPAN
+South Korea,KOR,Korea|Republic of Korea|KOREA|Korea Rep.
+Taiwan,TWN,TAIWAN
+Singapore,SGP,SINGAPORE
+Thailand,THA,THAILAND
+Vietnam,VNM,VIETNAM|Viet Nam
+Malaysia,MYS,MALAYSIA
+Indonesia,IDN,INDONESIA
+Bangladesh,BGD,BANGLADESH
+Pakistan,PAK,PAKISTAN
+Australia,AUS,AUSTRALIA
+Canada,CAN,CANADA
+Mexico,MEX,MEXICO
+Brazil,BRA,BRAZIL
+Argentina,ARG,ARGENTINA

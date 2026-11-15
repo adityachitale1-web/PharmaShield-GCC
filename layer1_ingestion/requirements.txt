@@ -1,0 +1,8 @@
+pandas>=2.1
+numpy>=1.24
+requests>=2.31
+openpyxl>=3.1        # FDA dashboard .xlsx exports
+beautifulsoup4>=4.12 # warning-letter HTML
+pypdf>=4.0           # optional: PDF warning letters / contracts
+python-docx>=1.1     # optional: .docx contracts
+pytest>=8.0          # tests

@@ -1,0 +1,89 @@
+manufacturing_site,manufacturing_country,iso3,confidence,basis
+"Aurobindo Unit III, India",India,IND,high,country in site name
+Mylan (formerly Matrix) Nashik,India,IND,high,Nashik is in Maharashtra India
+Hetero Unit III Hyderabad IN,India,IND,high,country in site name
+"Cipla, Goa, India",India,IND,high,country in site name
+"Strides, Bangalore, India.",India,IND,high,country in site name
+"Alere Medical Co., Ltd.",Japan,JPN,medium,Alere Medical Co. Ltd. is the Japanese (Matsudo) diagnostics unit; verify
+"Trinity Biotech, Plc",Ireland,IRL,medium,Trinity Biotech is headquartered in Bray Ireland; verify plant
+Inverness Japan,Japan,JPN,high,country in site name
+ABBVIE Ludwigshafen Germany,Germany,DEU,high,country in site name
+ABBVIE (Abbott) Logis. UK,United Kingdom,GBR,high,country in site name
+"BMS Meymac, France",France,FRA,high,country in site name
+"Aspen-OSD, Port Elizabeth, SA",South Africa,ZAF,high,Port Elizabeth SA = South Africa
+Chembio Diagnostics Sys. Inc.,United States,USA,medium,Chembio is based in Medford NY; verify plant
+"MSD, Haarlem, NL",Netherlands,NLD,high,country in site name
+"Standard Diagnostics, Korea",South Korea,KOR,high,country in site name
+"Aurobindo Unit VII, IN",India,IND,high,country in site name
+"KHB Test Kit Facility, Shanghai China",China,CHN,high,country in site name
+"Emcure Plot No.P-2, I.T-B.T. Park, Phase II, MIDC, Hinjwadi, Pune, India",India,IND,high,country in site name
+GSK Mississauga (Canada),Canada,CAN,high,country in site name
+"Janssen-Cilag, Latina, IT",Italy,ITA,high,country in site name
+"Micro labs, Verna, Goa, India",India,IND,high,country in site name
+"Cipla, Kurkumbh, India",India,IND,high,country in site name
+Roche Basel,Switzerland,CHE,high,Basel is in Switzerland
+"Hetero, Jadcherla, unit 5, IN",India,IND,high,country in site name
+"Pacific Biotech, Thailand",Thailand,THA,high,country in site name
+"Cipla, Patalganga, India",India,IND,high,country in site name
+"Ranbaxy, Paonta Shahib, India",India,IND,high,country in site name
+Bio-Rad Laboratories,United States,USA,low,HQ Hercules CA; HIV test kits may ship from France - verify
+GSK Ware (UK),United Kingdom,GBR,high,country in site name
+ABBVIE GmbH & Co.KG Wiesbaden,Germany,DEU,high,Wiesbaden is in Germany
+Gilead(Nycomed) Oranienburg DE,Germany,DEU,high,country in site name
+ABBVIE (Abbott) France,France,FRA,high,country in site name
+Bristol-Myers Squibb Anagni IT,Italy,ITA,high,country in site name
+"Mylan,  H-12 & H-13, India",India,IND,high,country in site name
+"MSD Midrand, J'burg, SA",South Africa,ZAF,high,Midrand Johannesburg = South Africa
+GSK Cape Town Factory (South Africa),South Africa,ZAF,high,country in site name
+Roche Madrid,Spain,ESP,high,Madrid is in Spain
+Cipla Ltd A-42 MIDC Mahar. IN,India,IND,high,country in site name
+"BMS Evansville, US",United States,USA,high,country in site name
+Premier Med. Corp Ltd. India,India,IND,high,country in site name
+GSK Aranda,Spain,ESP,high,Aranda de Duero is in Spain
+"Boehringer Ing., Koropi, GR",Greece,GRC,high,country in site name
+Not Applicable,,,none,no site recorded
+"Orasure Technologies, Inc USA",United States,USA,high,country in site name
+"BI, Ingelheim, Germany",Germany,DEU,high,country in site name
+MSD Elkton USA,United States,USA,high,country in site name
+Ranbaxy per Shasun Pharma,India,IND,medium,Shasun Pharma is an Indian contract manufacturer
+Inverness USA,United States,USA,high,country in site name
+"MSD Manati, Puerto Rico, (USA)",United States,USA,high,Puerto Rico mapped to USA for World Bank join
+"Novartis Pharma Suffern, USA",United States,USA,high,country in site name
+"Micro Labs, Hosur, India",India,IND,high,country in site name
+Macleods Daman Plant INDIA,India,IND,high,country in site name
+ABBVIE (Abbott) St. P'burg USA,United States,USA,high,country in site name
+GSK Crawley,United Kingdom,GBR,high,Crawley is in England
+"Orasure Technologies, Inc",United States,USA,medium,Orasure is based in Bethlehem PA
+Boehringer Ingelheim Roxane US,United States,USA,high,country in site name
+"Novartis Pharma AG, Switzerland",Switzerland,CHE,high,country in site name
+bioLytical Laboratories,Canada,CAN,medium,bioLytical is based in Richmond BC Canada
+Ipca Dadra/Nagar Haveli IN,India,IND,high,country in site name
+"Micro Labs Ltd. (Brown & Burk), India",India,IND,high,country in site name
+"MSD Patheon, Canada",Canada,CAN,high,country in site name
+"GSK, U1, Poznan, Poland",Poland,POL,high,country in site name
+INVERNESS ANY,,,none,ambiguous site label
+Human Diagnostic,Germany,DEU,low,Human GmbH is based in Wiesbaden; verify
+Ranbaxy Fine Chemicals LTD,India,IND,medium,Ranbaxy is an Indian manufacturer
+MSD South Granville Australia,Australia,AUS,high,country in site name
+"EY Laboratories, USA",United States,USA,high,country in site name
+"Medopharm Malur Factory, INDIA",India,IND,high,country in site name
+ABBVIE (Abbott) Japan Co. Ltd.,Japan,JPN,high,country in site name
+"Janssen Ortho LLC, Puerto Rico",United States,USA,high,Puerto Rico mapped to USA for World Bank join
+"Guilin OSD site, No 17, China",China,CHN,high,country in site name
+Ranbaxy per Shasun Pharma Ltd,India,IND,medium,Shasun Pharma is an Indian contract manufacturer
+Gland Pharma Ltd Pally Factory,India,IND,high,Gland Pharma Pally plant is near Hyderabad India
+ABBSP,,,none,ambiguous site label
+"OMEGA Diagnostics, UK",United Kingdom,GBR,high,country in site name
+BUNDI INTERNATIONAL DIAGNOSTICS LTD,,,none,could not verify location
+INVERNESS ORGENICS LINE,Israel,ISR,low,Orgenics was an Israeli diagnostics firm; verify
+"Meditab (for Cipla) Daman IN",India,IND,high,country in site name
+"Weifa A.S., Hausmanngt. 6, P.O. Box 9113 Grønland, 0133, Oslo, Norway",Norway,NOR,high,country in site name
+Premier Medical Corporation,India,IND,medium,same firm as Premier Med. Corp Ltd. India
+ABBVIE Labs North Chicago US,United States,USA,high,country in site name
+"Medochemie Factory A, CY",Cyprus,CYP,high,country in site name
+"Remedica, Limassol, Cyprus",Cyprus,CYP,high,country in site name
+GSK Barnard Castle UK,United Kingdom,GBR,high,country in site name
+"Gland Pharma, Hyderabad, IN",India,IND,high,country in site name
+"Access BIO, L.C.",United States,USA,medium,Access Bio is based in Somerset NJ
+Mepro Pharm Wadhwan Unit II,India,IND,medium,Wadhwan is in Gujarat India
+MedMira Inc.,Canada,CAN,medium,MedMira is based in Halifax Canada
